@@ -1,0 +1,10 @@
+services:
+  pipeline:
+    build: .
+    container_name: auto_story_pipeline
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+      - ./test_material:/app/test_material
+    restart: unless-stopped

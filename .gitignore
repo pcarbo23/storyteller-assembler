@@ -1,0 +1,50 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Caches and Virtual Environments
+.pytest_cache/
+.venv/
+venv/
+ENV/
+env/
+.env
+*.env.local
+
+# Operating System & IDE Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+.idea/
+.vscode/
+
+# Local Pipeline Data & Databases
+data/*.db
+data/*.db-*
+data/*.db-shm
+data/*.db-wal
+data/*.log
+data/*.json
+data/*.csv
+data/debug/
+data/tts_sandbox/
+data/ingest/*
+!data/ingest/.gitkeep
+data/processing/*
+!data/processing/.gitkeep
+data/output/*
+!data/output/.gitkeep
+data/reports/*
+!data/reports/.gitkeep
+
+# Heavy Test Materials (~37GB)
+test_material/
+
+# macOS Applet Binary & Signatures (recreatable from launch_dashboard.command)
+Launch Dashboard.app/
