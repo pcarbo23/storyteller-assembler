@@ -635,7 +635,7 @@ class DTBConverter:
                 '  <head>',
                 f'    <meta name="dtb:uid" content="{self.uid}"/>',
                 f'    <meta name="dtb:totalElapsedTime" content="{elapsed_formatted}"/>',
-                '    <meta name="dtb:generator" content="Storyteller Assembler"/>',
+                f'    <meta name="dtb:generator" content="Storyteller Assembler {__version__}"/>',
                 '  </head>',
                 '  <body>',
                 '    <seq id="seq-1">'
@@ -781,7 +781,7 @@ class DTBConverter:
             '<ncx version="1.1.0">',
             '  <head>',
             f'    <meta name="dtb:uid" content="{self.uid}"/>',
-            '    <meta name="dtb:generator" content="Storyteller Assembler"/>',
+            f'    <meta name="dtb:generator" content="Storyteller Assembler {__version__}"/>',
             f'    <meta name="dtb:depth" content="{max_depth}"/>',
             '    <meta name="dtb:maxPageNormal" content="0"/>',
             '    <meta name="dtb:pageFront" content="0"/>',
