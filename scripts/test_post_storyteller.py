@@ -27,6 +27,7 @@ if not in_virtualenv:
     print("="*80 + "\n")
     sys.exit(1)
 
+from src import __version__
 from src.main import process_aligned_epub
 from src.tts_generator import TTSGenerator
 
@@ -75,7 +76,10 @@ def extract_validator_version(xml_path: Path) -> str:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Verify compliance of post-storyteller media overlay EPUB.")
+    parser = argparse.ArgumentParser(
+        description=f"Storyteller Assembler: Verify compliance of post-storyteller media overlay EPUB (v{__version__})."
+    )
+    parser.add_argument("-v", "--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("--epub", required=True, help="Path to the post-storyteller media overlay EPUB.")
     parser.add_argument("--source", required=True, help="Path to the original pre-storyteller source material directory.")
     parser.add_argument("--output", default="./data/output", help="Directory to save final master DTB.")

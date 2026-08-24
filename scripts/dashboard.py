@@ -17,6 +17,10 @@ gc.collect()
 
 # Ensure project root is in path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from src import __version__
 
 # Add common macOS paths to environment PATH for GUI environment support (like AppleScript App launches)
 for path in ["/usr/local/bin", "/opt/homebrew/bin", "/Applications/Docker.app/Contents/Resources/bin"]:
@@ -25,7 +29,7 @@ for path in ["/usr/local/bin", "/opt/homebrew/bin", "/Applications/Docker.app/Co
 
 # Set page title and layout
 st.set_page_config(
-    page_title="Storyteller Assembler Dashboard",
+    page_title=f"Storyteller Assembler Dashboard (v{__version__})",
     page_icon="📚",
     layout="wide",
     initial_sidebar_state="collapsed"
@@ -38,12 +42,25 @@ st.markdown("""
             font-size: 2.5rem;
             color: #1E3A8A;
             font-weight: bold;
-            margin-bottom: 0.5rem;
+            margin-bottom: 0.2rem;
+            display: flex;
+            align-items: baseline;
+            gap: 0.75rem;
+        }
+        .version-tag {
+            font-size: 1.05rem;
+            font-weight: 600;
+            color: #1D4ED8;
+            background-color: #DBEAFE;
+            padding: 0.15rem 0.6rem;
+            border-radius: 9999px;
+            border: 1px solid #BFDBFE;
+            vertical-align: middle;
         }
         .subheader {
-            font-size: 1.1rem;
+            font-size: 1.05rem;
             color: #4B5563;
-            margin-bottom: 2rem;
+            margin-bottom: 1.75rem;
         }
         /* Hide top-right running man / spinner status indicator */
         [data-testid="stStatusWidget"],
@@ -177,7 +194,7 @@ def render_dashboard():
     # Setup automatic polling using streamlit-autorefresh (5 seconds)
     st_autorefresh(interval=5000, key="watcher_dashboard_autorefresh")
 
-    st.markdown('<div class="main-header">📚 Storyteller Assembler Dashboard</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="main-header">📚 Storyteller Assembler Dashboard <span class="version-tag">v{__version__}</span></div>', unsafe_allow_html=True)
     st.markdown('<div class="subheader">Real-time status monitor for local macOS sandbox audio synchronization & compliance pipeline.</div>', unsafe_allow_html=True)
 
     # Initialize session state for persistent control transitions

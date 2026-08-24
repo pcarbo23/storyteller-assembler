@@ -38,6 +38,7 @@ if not in_virtualenv:
     print("="*80 + "\n")
     sys.exit(1)
 
+from src import __version__
 from src.ingestion import IngestionWatcher
 from src.align_runner import AlignRunner
 from src.tts_generator import TTSGenerator, extract_metadata_from_opf
@@ -369,7 +370,7 @@ def main():
     id_manager = ProdIDManager(config_path)
     tracker = ProductionTracker(db_path, csv_path)
     
-    print(f"=== Starting Ingestion Watcher Daemon ===")
+    print(f"=== Starting Ingestion Watcher Daemon (v{__version__}) ===")
     print(f"Monitoring folder: {ingest_dir}")
     print(f"Waiting for books...")
     

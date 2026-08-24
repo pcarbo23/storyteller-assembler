@@ -1,14 +1,15 @@
-# Storyteller Assembler (`auto_story_pipe`)
+# Storyteller Assembler
 
+[![Version: 1.0.0](https://img.shields.io/badge/version-1.0.0-blueviolet.svg?style=flat&logo=semver&logoColor=white)](https://semver.org/)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![Standard: ANSI/NISO Z39.86-2002](https://img.shields.io/badge/standard-ANSI%2FNISO%20Z39.86--2002-green.svg)](http://www.daisy.org/z3986/2005/Z3986-2005.html)
 [![Standard: EPUB 3.0 Media Overlays](https://img.shields.io/badge/standard-EPUB%203.0%20Overlays-informational.svg)](https://www.w3.org/publishing/epub3/epub-mediaoverlays.html)
-[![Specification: NLS 1202/1203/1206](https://img.shields.io/badge/spec-NLS%201202%20%7C%201203%20%7C%201206-orange.svg)](https://www.loc.gov/nls/)
+[![Specification: NLS 1202/1203](https://img.shields.io/badge/spec-NLS%201202%20%7C%201203%20%7C%201206-orange.svg)](https://www.loc.gov/nls/who-we-are/guidelines-and-specifications/contract-specifications/)
 [![Docker: Transient Aligner](https://img.shields.io/badge/docker-node%3Aalpine-2496ED.svg?logo=docker&logoColor=white)](https://hub.docker.com/_/node)
 
 An automated, end-to-end production pipeline and mastering suite for **National Library Service (NLS) Digital Talking Books (DTB)** and synchronized **EPUB 3.0 Media Overlay audiobooks**.
 
-`auto_story_pipe` ingests raw book pairs (source trade EPUBs and audiobook narration), performs forced audio-text alignment using a zero-overhead transient container, enriches publication metadata from online ISBN databases, synthesizes standardized NLS opening and closing announcements with exact reading duration convergence via Neural TTS, packages compliant ANSI/NISO Z39.86 DTB deliverables, and performs automated Java compliance verification (`ZedVal` / `NlsVal2`).
+`Storyteller Assembler` ingests raw book pairs (source trade EPUBs and audiobook narration), performs forced audio-text alignment using a zero-overhead transient container, enriches publication metadata from online ISBN databases, synthesizes standardized NLS opening and closing announcements with exact reading duration convergence via Neural TTS, packages compliant ANSI/NISO Z39.86 DTB deliverables, and performs automated Java compliance verification (`ZedVal` / `NlsVal2`).
 
 ---
 

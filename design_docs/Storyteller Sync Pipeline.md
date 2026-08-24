@@ -75,13 +75,10 @@ This conversion process requires custom Python scripting and the use of existing
 
 #### **NLS Specification Compliance (Leveraging Three Existing Python Modules)**
 
-The final package must adhere to NLS Specifications 1203, 1205, and 1206\. The MD5, encryption and deliverable packaging requirements of 1203, 1205, and 1206 can be met by leveraging three existing python modules, however due to the needs for portability outside of the testing sandbox, the existing code will need to be hard coded into the new software.
+The final package must adhere to NLS Specifications 1203
 
 * **NLS Spec 1203 (Unprotected DTB Requirements):** Governs the fundamental construction, file naming, and quality of the unprotected DTB. The custom conversion code must adhere to these rules during construction.  
-* **NLS Spec 1206 (Uploading/Packaging & Checksums):** Requires specific packaging and MD5 checksum generation for all files.  
-  * **Module:** We will leverage the existing md5-digest-generator (or standard hashlib) and the nls\_packager modules to handle the final file validation and delivery packaging.  
-* **NLS Spec 1205 (Protected DTB / Encryption):** If encryption is required for the final deliverable, the DTB must be encrypted according to Spec 1205\.  
-  * **Module:** We will leverage the existing dtb\_encrypt module to handle the application of NLS-specific encryption to the Z39.86-2002 files.
+
 
 ## **Summary of Python Module Usage & Requirements**
 
@@ -98,9 +95,3 @@ The final package must adhere to NLS Specifications 1203, 1205, and 1206\. The M
 | Audio Metadata | mutagen | To calculate final playing time for TTS. |
 
 | Z39.86-2002 Conversion | **Custom Python Code** | Agent must scaffold this class. |
-
-| File Checksums | hashlib | Built-in Python library. |
-
-| DTB Packaging | nls\_packager | Assume available in environment. |
-
-| DTB Encryption | dtb\_encrypt | Assume available in environment. |
