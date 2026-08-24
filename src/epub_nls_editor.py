@@ -7,10 +7,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, List
 from bs4 import BeautifulSoup
+from src import __version__
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_GENERATOR = "Storyteller Assembler 1.0.0"
+DEFAULT_GENERATOR = f"Storyteller Assembler {__version__}"
 NLS_PREFIX_URL = "http://www.loc.gov/nls/metadata/"
 
 

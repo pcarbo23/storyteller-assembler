@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 from xml.etree import ElementTree as ET
 import mutagen
+from src import __version__
 
 logger = logging.getLogger(__name__)
 
@@ -1033,7 +1034,7 @@ class DTBConverter:
         #     '    <item id="smil_dtd" href="dtbsmil110.dtd" media-type="text/xml" />'
         # ])
         opf_lines.extend([
-            '      <meta name="dtb:producer" content="Storyteller Assembler"/>',
+            f'      <meta name="dtb:producer" content="Storyteller Assembler {__version__}"/>',
             f'      <meta name="dtb:sourcePublisher" content="{source_pub_clean}"/>',
             f'      <meta name="nls:recordingAgency" content="{rec_agency_clean}"/>',
             '    </x-metadata>',
