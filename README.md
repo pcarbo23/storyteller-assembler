@@ -272,22 +272,46 @@ python scripts/run_ingest_watcher.py
 ### 3. Direct Testing & Validation Tool (`test_post_storyteller.py`)
 
 #### Use Case:
-When you already have a **pre-aligned readaloud EPUB** (for instance, exported from an external Storyteller instance or alignment tool) and need to verify compliance or package it directly without re-running alignment.
+When you already have a **pre-aligned readaloud EPUB** (for instance, generated from an external Storyteller alignment run or test dataset) along with the original source audio/material directory, and need to:
+1. Run the post-alignment DTB conversion pipeline directly (generating master WAV audio, SMIL files, NCX navigation, and OPF manifest) without re-running time-consuming forced alignment.
+2. Synthesize NLS opening and closing announcements.
+3. Automatically execute NLS Java compliance validators (`ZedVal` and `NlsVal2` via `AllVal.jar`).
+4. Generate structured XML audit reports in `data/reports/`.
 
 #### How to Run:
 ```bash
+# Activate your virtual environment
 source .venv/bin/activate
-python scripts/test_post_storyteller.py "/path/to/aligned_book (readaloud).epub" --prod-id 100001
+
+# Basic execution with required arguments:
+python scripts/test_post_storyteller.py \
+  --epub "test_material/aligned/A Mouthful of Dust (readaloud).epub" \
+  --source "test_material/A Mouthful of Dust"
+
+# Full execution with custom production ID and custom output directory:
+python scripts/test_post_storyteller.py \
+  -e "test_material/aligned/Agnes Aubert's Mystical Cat Shelter (readaloud).epub" \
+  -s "test_material/Agnes Aubert's Mystical Cat Shelter" \
+  -p "db100002" \
+  -o "./data/output"
 ```
 
-#### CLI Options:
-| Argument / Option | Default | Description |
-| :--- | :--- | :--- |
-| `epub_path` *(Positional)* | *Required* | Path to the aligned EPUB 3 Media Overlay file. |
-| `--prod-id` | `100001` | Specific 5-digit or 6-digit production ID to assign. |
-| `--output-dir` | `data/output` | Destination directory for the generated master DTB folder. |
-| `--work-dir` | `data/processing` | Intermediate working directory. |
-| `--validator-jar` | `test_material/AllVal.jar` | Path to `AllVal.jar` for immediate ZedVal/NlsVal2 verification. |
+#### Command-Line Arguments & Options:
+| Flag / Option | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `-e`, `--epub` | **Required** | *None* | Path to the post-storyteller media overlay EPUB file (`*.epub`). |
+| `-s`, `--source` | **Required** | *None* | Path to the original pre-storyteller source material directory containing raw audio tracks and book files. |
+| `-p`, `--prod-id` | Optional | *Auto-derived* | Specific Production ID to assign (e.g., `db100001`). If omitted, automatically derives a clean alphanumeric identifier from the EPUB filename. |
+| `-o`, `--output` | Optional | `./data/output` | Destination directory where the final master DTB folder (`<prod_id>.dtb/`) will be saved. |
+| `-v`, `--version` | Optional | *N/A* | Displays the Storyteller Assembler software version and exits. |
+| `-h`, `--help` | Optional | *N/A* | Displays detailed usage syntax and argument descriptions. |
+
+#### Workflow Executed by the Script:
+1. **Virtual Environment Guard**: Verifies that execution is running under the local project `.venv` interpreter.
+2. **DTB Package Compilation**: Invokes `process_aligned_epub` to extract SMIL overlays, synthesize NLS opening and closing audio credits, transcode multi-track audio into master 44.1kHz WAV files, generate sequential SMIL 1.0 sync maps, create hierarchical NCX navigation points, and write the OPF package manifest.
+3. **Automated Compliance Validation**: Executes `ZedVal` (and `NlsVal2` if enabled) from `test_material/AllVal.jar` against the generated OPF package document.
+4. **Report Archiving**: Relocates `ZedVal.xml`, `ZedVal.log`, `NlsVal2.xml`, and `NlsVal2.log` into `data/reports/<prod_id>_*.xml` for inspection.
+5. **Failure Analysis**: Parses all `<error>` and `<failure>` nodes, displaying line numbers and test IDs in the terminal. Returns exit code `0` on total compliance, or exit code `1` if any validation failures are detected.
 
 ---
 

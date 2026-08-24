@@ -80,10 +80,10 @@ def main():
         description=f"Storyteller Assembler: Verify compliance of post-storyteller media overlay EPUB (v{__version__})."
     )
     parser.add_argument("-v", "--version", action="version", version=f"%(prog)s {__version__}")
-    parser.add_argument("--epub", required=True, help="Path to the post-storyteller media overlay EPUB.")
-    parser.add_argument("--source", required=True, help="Path to the original pre-storyteller source material directory.")
-    parser.add_argument("--output", default="./data/output", help="Directory to save final master DTB.")
-    parser.add_argument("--prod-id", help="Production ID. Defaults to name-based ID.")
+    parser.add_argument("-e", "--epub", required=True, help="Path to the post-storyteller media overlay EPUB.")
+    parser.add_argument("-s", "--source", required=True, help="Path to the original pre-storyteller source material directory.")
+    parser.add_argument("-o", "--output", default="./data/output", help="Directory to save final master DTB.")
+    parser.add_argument("-p", "--prod-id", help="Production ID. Defaults to name-based ID.")
     args = parser.parse_args()
 
     epub_path = Path(args.epub)
