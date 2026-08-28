@@ -86,3 +86,90 @@ def test_z39_xml_generation(tmp_path):
     assert "us-nls-db154321" in opf_content
     assert "National Library Service" in opf_content
 
+    ncx_file = tmp_path / "db154321.ncx"
+    assert ncx_file.exists()
+    ncx_content = ncx_file.read_text()
+    assert '<meta name="dtb:depth" content="1"/>' in ncx_content
+
+
+def test_dtb_depth_calculation_and_pruning(tmp_path):
+    converter = DTBConverter(prod_id="db100039", work_dir=tmp_path)
+
+    # Simulated tree: 1 valid chapter, 1 un-narrated preview with 2 nested levels
+    nav_tree = [
+        {"id": "c1", "title": "Chapter 1", "src": "c1.xhtml", "children": []},
+        {
+            "id": "p1",
+            "title": "Preview",
+            "src": "preview.xhtml",
+            "children": [
+                {
+                    "id": "p1_1",
+                    "title": "Preview Part 1",
+                    "src": "p1_1.xhtml",
+                    "children": [
+                        {"id": "p1_1_a", "title": "Section A", "src": "p1_1_a.xhtml", "children": []}
+                    ]
+                }
+            ]
+        }
+    ]
+
+    # Only c1.xhtml has audio segments
+    smil_segments = [
+        {"text_src": "c1.xhtml", "audio_zip_path": "audio1.wav", "clip_begin": 0.0, "clip_end": 10.0}
+    ]
+
+    pruned = converter.prune_nav_tree(nav_tree, smil_segments)
+    assert len(pruned) == 1
+    assert pruned[0]["id"] == "c1"
+    assert converter.calculate_max_depth(pruned) == 1
+
+    # Test rendered NCX string depth calculation
+    flat_ncx = """<?xml version="1.0" encoding="UTF-8"?>
+    <ncx version="1.1.0">
+      <head><meta name="dtb:depth" content="3"/></head>
+      <navMap>
+        <navPoint id="p1"><content src="s.smil#p1"/></navPoint>
+        <navPoint id="p2"><content src="s.smil#p2"/></navPoint>
+      </navMap>
+    </ncx>"""
+    assert converter.calculate_rendered_ncx_depth(flat_ncx) == 1
+
+    nested_ncx = """<?xml version="1.0" encoding="UTF-8"?>
+    <ncx version="1.1.0">
+      <head><meta name="dtb:depth" content="1"/></head>
+      <navMap>
+        <navPoint id="p1">
+          <content src="s.smil#p1"/>
+          <navPoint id="p1_1">
+            <content src="s.smil#p1_1"/>
+            <navPoint id="p1_1_1"><content src="s.smil#p1_1_1"/></navPoint>
+          </navPoint>
+        </navPoint>
+      </navMap>
+    </ncx>"""
+    assert converter.calculate_rendered_ncx_depth(nested_ncx) == 3
+
+
+def test_boundary_inverted_clips_sanitization(tmp_path):
+    converter = DTBConverter(prod_id="db100042", work_dir=tmp_path)
+
+    # Simulated smil segments with inverted clip on track 1 followed by normal on track 2
+    smil_segments = [
+        {"par_id": "c9-s1", "text_src": "ch9.xhtml#s1", "audio_zip_path": "track1.wav", "clip_begin": 0.0, "clip_end": 10.0},
+        {"par_id": "c10-s0", "text_src": "ch10.xhtml#s0", "audio_zip_path": "track1.wav", "clip_begin": 885.56, "clip_end": 883.152},  # Inverted!
+        {"par_id": "c10-s1", "text_src": "ch10.xhtml#s1", "audio_zip_path": "track2.wav", "clip_begin": 0.0, "clip_end": 7.4}
+    ]
+
+    audio_map = {"track1.wav": "db100042-0012.wav", "track2.wav": "db100042-0013.wav"}
+    par_map = converter.build_par_by_text_src(smil_segments, audio_map, "opening.wav")
+
+    # ch10.xhtml should map to track 2 at 0.0s - 7.4s, NOT track 1
+    assert "ch10.xhtml" in par_map
+    assert par_map["ch10.xhtml"]["audio_src"] == "db100042-0013.wav"
+    assert par_map["ch10.xhtml"]["clip_begin"] == "0:00:00.000"
+    assert par_map["ch10.xhtml"]["clip_end"] == "0:00:07.400"
+
+
+

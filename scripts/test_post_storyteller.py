@@ -84,6 +84,7 @@ def main():
     parser.add_argument("-s", "--source", required=True, help="Path to the original pre-storyteller source material directory.")
     parser.add_argument("-o", "--output", default="./data/output", help="Directory to save final master DTB.")
     parser.add_argument("-p", "--prod-id", help="Production ID. Defaults to name-based ID.")
+    parser.add_argument("-t", "--tts", action="store_true", default=False, help="Enable TTS synthesis.")
     args = parser.parse_args()
 
     epub_path = Path(args.epub)
@@ -106,7 +107,7 @@ def main():
         prod_id = "".join([c for c in prod_id if c.isalnum() or c == "_"])[:10]
 
     print(f"--- 1. Running DTB Pipeline for {epub_path.name} (Prod ID: {prod_id}) ---")
-    tts_gen = TTSGenerator(use_coqui=False)  # Fast TTS generator fallback for testing
+    tts_gen = TTSGenerator(use_coqui=args.tts)
     
     try:
         dtb_dir = process_aligned_epub(

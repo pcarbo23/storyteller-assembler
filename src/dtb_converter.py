@@ -122,6 +122,28 @@ def parse_clock_time(time_str: str) -> float:
     return 0.0
 
 
+def get_audio_duration_seconds(audio_path: Path) -> Optional[float]:
+    """Returns the precise duration in seconds of a WAV, MP3, FLAC or other audio file."""
+    audio_path = Path(audio_path)
+    if not audio_path.exists():
+        return None
+    try:
+        if audio_path.suffix.lower() == ".wav":
+            import wave
+            with wave.open(str(audio_path), "rb") as w:
+                return w.getnframes() / float(w.getframerate())
+    except Exception:
+        pass
+    try:
+        import mutagen
+        f = mutagen.File(audio_path)
+        if f and f.info and hasattr(f.info, "length") and f.info.length is not None:
+            return float(f.info.length)
+    except Exception:
+        pass
+    return None
+
+
 class EPUBOverlayExtractor:
     """Extracts metadata, multi-level NCX/NAV navigation, and SMIL overlay synchronization from an EPUB3 file."""
 
@@ -211,6 +233,14 @@ class EPUBOverlayExtractor:
                         audio_src = audio_el.attrib.get("src", "")
                         clip_begin = parse_clock_time(audio_el.attrib.get("clipBegin", "0"))
                         clip_end = parse_clock_time(audio_el.attrib.get("clipEnd", "0"))
+
+                        # Validate and discard degenerate / inverted clips (clip_begin >= clip_end)
+                        if clip_begin >= clip_end:
+                            logger.warning(
+                                f"Dropping invalid SMIL segment '{par_id}' in {smil_zip_path}: "
+                                f"clipBegin ({clip_begin}s) >= clipEnd ({clip_end}s) on {audio_src}"
+                            )
+                            continue
 
                         # Resolve relative audio zip path
                         if str(smil_dir) != ".":
@@ -423,6 +453,107 @@ class DTBConverter:
         return output_path
 
 
+    def build_par_by_text_src(
+        self,
+        smil_segments: List[Dict[str, Any]],
+        converted_audio_map: Dict[str, str],
+        default_wav_name: str = ""
+    ) -> Dict[str, Dict[str, Any]]:
+        """Builds lookup mapping from HTML text sources to SMIL audio clip details."""
+        audio_durations = {}
+        for wav_name in set(converted_audio_map.values()) | {default_wav_name}:
+            if wav_name:
+                dur_val = get_audio_duration_seconds(self.work_dir / wav_name)
+                if dur_val is not None:
+                    audio_durations[wav_name] = dur_val
+
+        par_by_text_src = {}
+        for idx, seg in enumerate(smil_segments, start=1):
+            wav_name = converted_audio_map.get(seg.get("audio_zip_path", ""), default_wav_name)
+            clip_b_sec = seg.get("clip_begin", 0.0)
+            clip_e_sec = seg.get("clip_end", 0.0)
+
+            dur = audio_durations.get(wav_name)
+            if dur is not None:
+                clip_e_sec = min(clip_e_sec, dur)
+                clip_b_sec = min(clip_b_sec, clip_e_sec)
+
+            if clip_b_sec >= clip_e_sec:
+                continue
+
+            par_key_id = f"par-body-{idx}"
+            clip_b = format_time(clip_b_sec)
+            clip_e = format_time(clip_e_sec)
+            info = {
+                "par_key_id": par_key_id,
+                "audio_src": wav_name,
+                "clip_begin": clip_b,
+                "clip_end": clip_e
+            }
+
+            text_src = seg.get("text_src", "")
+            if text_src:
+                norm_text_src = str(Path(text_src).as_posix())
+                if norm_text_src not in par_by_text_src:
+                    par_by_text_src[norm_text_src] = info
+                base_text_src = norm_text_src.split("#")[0]
+                if base_text_src not in par_by_text_src:
+                    par_by_text_src[base_text_src] = info
+                filename_only = Path(base_text_src).name
+                if filename_only not in par_by_text_src:
+                    par_by_text_src[filename_only] = info
+        return par_by_text_src
+
+    @staticmethod
+    def resolve_node_audio(node: Dict[str, Any], par_by_text_src: Dict[str, Dict[str, Any]]) -> Optional[Tuple[str, str, str, str]]:
+        """Resolves node HTML source to corresponding SMIL audio clip details."""
+        src = node.get("src", "")
+        match = None
+        if src:
+            norm_src = str(Path(src).as_posix())
+            base_src = norm_src.split("#")[0]
+            src_filename = Path(base_src).name
+
+            match = par_by_text_src.get(norm_src) or par_by_text_src.get(base_src) or par_by_text_src.get(src_filename)
+
+            if not match:
+                for text_key, info in par_by_text_src.items():
+                    key_filename = Path(text_key.split("#")[0]).name
+                    if key_filename == src_filename:
+                        if "#" in norm_src and "#" in text_key:
+                            if norm_src.split("#")[1] == text_key.split("#")[1]:
+                                match = info
+                                break
+
+        if match:
+            return match["audio_src"], match["clip_begin"], match["clip_end"], match["par_key_id"]
+        return None
+
+    def prune_nav_tree(
+        self,
+        nav_tree: List[Dict[str, Any]],
+        smil_segments: List[Dict[str, Any]],
+        converted_audio_map: Optional[Dict[str, str]] = None
+    ) -> List[Dict[str, Any]]:
+        """Prunes navigation tree to retain only nodes that resolve to narrated audio (or have valid children)."""
+        par_by_text_src = self.build_par_by_text_src(smil_segments, converted_audio_map or {})
+
+        def prune_nodes(nodes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+            pruned = []
+            for node in nodes:
+                children = prune_nodes(node.get("children", []))
+                resolved = self.resolve_node_audio(node, par_by_text_src)
+                if resolved:
+                    node_copy = dict(node)
+                    node_copy["children"] = children
+                    pruned.append(node_copy)
+                elif children:
+                    # Hoist children if parent has no audio
+                    pruned.extend(children)
+            return pruned
+
+        return prune_nodes(nav_tree)
+
     def calculate_max_depth(self, nav_tree: List[Dict[str, Any]]) -> int:
         if not nav_tree:
             return 1
@@ -433,6 +564,30 @@ class DTBConverter:
             return 1 + max(depth(c) for c in node["children"])
 
         return max(depth(n) for n in nav_tree)
+
+    @staticmethod
+    def calculate_rendered_ncx_depth(ncx_content: str) -> int:
+        """Calculates actual maximum nesting depth of <navPoint> elements from rendered NCX XML."""
+        try:
+            import re
+            xml_to_parse = ncx_content
+            if "<!DOCTYPE" in xml_to_parse:
+                xml_to_parse = re.sub(r"<!DOCTYPE[^>]*>", "", xml_to_parse)
+            root = ET.fromstring(xml_to_parse.encode("utf-8"))
+            nav_map = root.find(".//{*}navMap") if "{" in root.tag else root.find(".//navMap")
+            if nav_map is None:
+                return 1
+
+            def _get_depth(elem) -> int:
+                children = [c for c in elem if c.tag.endswith("navPoint") or c.tag == "navPoint"]
+                if not children:
+                    return 0
+                return 1 + max(_get_depth(c) for c in children)
+
+            return max(1, _get_depth(nav_map))
+        except Exception as e:
+            logger.warning(f"Error calculating rendered NCX depth: {e}")
+            return 1
 
     def generate_z39_package(
         self,
@@ -551,21 +706,8 @@ class DTBConverter:
         ensuring no SMIL file exceeds 100KB. Returns (list_of_smil_filenames, par_to_smil_map).
         par_to_smil_map: global par_index (1-based) -> (smil_filename, par_id_in_that_smil)
         """
-        opening_duration = 5.0
-        try:
-            f = mutagen.File(self.work_dir / opening_wav_name)
-            if f and f.info:
-                opening_duration = f.info.length
-        except Exception:
-            pass
-
-        closing_duration = 5.0
-        try:
-            f = mutagen.File(self.work_dir / closing_wav_name)
-            if f and f.info:
-                closing_duration = f.info.length
-        except Exception:
-            pass
+        opening_duration = get_audio_duration_seconds(self.work_dir / opening_wav_name) or 5.0
+        closing_duration = get_audio_duration_seconds(self.work_dir / closing_wav_name) or 5.0
 
         # Build list of all par items across the book
         # Item format: (par_key_id, wav_name, clip_begin, clip_end)
@@ -588,14 +730,35 @@ class DTBConverter:
         else:
             all_pars.append(("par-titauth", opening_wav_name, "0:00:00.000", format_time(opening_duration)))
 
+        # Collect audio file durations to clamp clips to file EOF
+        audio_durations = {
+            opening_wav_name: opening_duration,
+            closing_wav_name: closing_duration
+        }
+        for wav_name in set(converted_audio_map.values()):
+            dur_val = get_audio_duration_seconds(self.work_dir / wav_name)
+            if dur_val is not None:
+                audio_durations[wav_name] = dur_val
+
         # 2. Body overlay pars
         for idx, seg in enumerate(smil_segments, start=1):
             zip_audio = seg["audio_zip_path"]
             wav_name = converted_audio_map.get(zip_audio)
             if not wav_name:
                 continue
-            c_begin = format_time(seg["clip_begin"])
-            c_end = format_time(seg["clip_end"])
+
+            cb = seg.get("clip_begin", 0.0)
+            ce = seg.get("clip_end", 0.0)
+            dur = audio_durations.get(wav_name)
+            if dur is not None:
+                ce = min(ce, dur)
+                cb = min(cb, ce)
+
+            if cb >= ce:
+                continue
+
+            c_begin = format_time(cb)
+            c_end = format_time(ce)
             all_pars.append((f"par-body-{idx}", wav_name, c_begin, c_end))
 
         # 3. Closing announcement par
@@ -730,30 +893,7 @@ class DTBConverter:
         close_clip_end = format_time(closing_timing.get("closing_01_end_of_title", {}).get("end", 5.0))
 
         # Build mapping from EPUB HTML targets to SMIL audio clip details
-        par_by_text_src = {}
-        for idx, seg in enumerate(smil_segments, start=1):
-            par_key_id = f"par-body-{idx}"
-            wav_name = converted_audio_map.get(seg["audio_zip_path"], opening_wav_name)
-            clip_b = format_time(seg["clip_begin"])
-            clip_e = format_time(seg["clip_end"])
-            info = {
-                "par_key_id": par_key_id,
-                "audio_src": wav_name,
-                "clip_begin": clip_b,
-                "clip_end": clip_e
-            }
-
-            text_src = seg.get("text_src", "")
-            if text_src:
-                norm_text_src = str(Path(text_src).as_posix())
-                if norm_text_src not in par_by_text_src:
-                    par_by_text_src[norm_text_src] = info
-                base_text_src = norm_text_src.split("#")[0]
-                if base_text_src not in par_by_text_src:
-                    par_by_text_src[base_text_src] = info
-                filename_only = Path(base_text_src).name
-                if filename_only not in par_by_text_src:
-                    par_by_text_src[filename_only] = info
+        par_by_text_src = self.build_par_by_text_src(smil_segments, converted_audio_map, opening_wav_name)
 
         first_smil_file, first_par_id = par_to_smil_map.get("par-titauth", (f"{self.prod_id_full}-0001.smil", "par-titauth"))
         last_smil_file, last_par_id = par_to_smil_map.get("par-close", (f"{self.prod_id_full}-0001.smil", "par-close"))
@@ -809,37 +949,12 @@ class DTBConverter:
         if ann_nav_lines:
             ncx_lines.extend(ann_nav_lines)
 
-
-        def resolve_node_audio(node: Dict[str, Any]) -> Optional[Tuple[str, str, str, str]]:
-            src = node.get("src", "")
-            match = None
-            if src:
-                norm_src = str(Path(src).as_posix())
-                base_src = norm_src.split("#")[0]
-                src_filename = Path(base_src).name
-
-                match = par_by_text_src.get(norm_src) or par_by_text_src.get(base_src) or par_by_text_src.get(src_filename)
-
-                if not match:
-                    for text_key, info in par_by_text_src.items():
-                        key_filename = Path(text_key.split("#")[0]).name
-                        if key_filename == src_filename:
-                            if "#" in norm_src and "#" in text_key:
-                                if norm_src.split("#")[1] == text_key.split("#")[1]:
-                                    match = info
-                                    break
-
-            if match:
-                return match["audio_src"], match["clip_begin"], match["clip_end"], match["par_key_id"]
-            return None
-
-
         def render_nav_nodes(nodes: List[Dict[str, Any]], play_order_start: int) -> Tuple[List[str], int]:
             lines = []
             curr_order = play_order_start
 
             for node in nodes:
-                resolved = resolve_node_audio(node)
+                resolved = self.resolve_node_audio(node, par_by_text_src)
                 if not resolved:
                     if node.get("children"):
                         child_lines, curr_order = render_nav_nodes(node["children"], curr_order)
@@ -867,8 +982,6 @@ class DTBConverter:
 
             return lines, curr_order
 
-
-
         if nav_tree:
             nav_lines, _ = render_nav_nodes(nav_tree, 1)
             ncx_lines.extend(nav_lines)
@@ -886,10 +999,21 @@ class DTBConverter:
             '</ncx>'
         ])
 
-        with open(output_ncx, "w", encoding="utf-8") as f:
-            f.write("\n".join(ncx_lines))
+        ncx_content = "\n".join(ncx_lines)
+        actual_depth = self.calculate_rendered_ncx_depth(ncx_content)
 
-        logger.info(f"Generated Z39 NCX file with titauth and close navPoints: {output_ncx}")
+        # Ensure dtb:depth exactly matches the actual maximum nesting depth of <navPoint> tags
+        import re
+        ncx_content = re.sub(
+            r'<meta\s+name=["\']dtb:depth["\']\s+content=["\']\d+["\']\s*/>',
+            f'<meta name="dtb:depth" content="{actual_depth}"/>',
+            ncx_content
+        )
+
+        with open(output_ncx, "w", encoding="utf-8") as f:
+            f.write(ncx_content)
+
+        logger.info(f"Generated Z39 NCX file with dtb:depth={actual_depth}: {output_ncx}")
         return output_ncx
 
 

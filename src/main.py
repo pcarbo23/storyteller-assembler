@@ -101,7 +101,7 @@ def process_aligned_epub(
         "subjects": subjects,
         "author_names_and_spelling": f"{author_spoken}, {author_spelled}",
         "author_spelling_only": author_spelled,
-        "navigation_levels": converter.calculate_max_depth(epub_data["nav_tree"])
+        "navigation_levels": converter.calculate_max_depth(converter.prune_nav_tree(epub_data.get("nav_tree", []), epub_data.get("smil_segments", [])))
     })
 
 
