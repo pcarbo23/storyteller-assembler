@@ -19,17 +19,38 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(na
 logger = logging.getLogger("pipeline_main")
 
 
+def get_configured_target_lufs() -> float:
+    """Read default target LUFS from config/production_config.json if available, defaulting to -21.0."""
+    import json
+    config_path = PROJECT_ROOT / "config" / "production_config.json"
+    if config_path.exists():
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if "target_lufs" in data:
+                    return float(data["target_lufs"])
+                if "audio" in data and isinstance(data["audio"], dict) and "target_lufs" in data["audio"]:
+                    return float(data["audio"]["target_lufs"])
+        except Exception as e:
+            logger.debug(f"Could not load target_lufs from config: {e}")
+    return -21.0
+
+
 def process_aligned_epub(
     epub_path: Path,
     prod_id: str,
     tts_gen: TTSGenerator,
     output_dir: Path,
     work_dir: Path,
-    raw_audio_dir: Optional[Path] = None
+    raw_audio_dir: Optional[Path] = None,
+    target_lufs: Optional[float] = None
 ) -> Path:
     """Process a pre-aligned Media Overlay EPUB3 audiobook into a full NLS Z39.86 Master WAV DTB."""
+    if target_lufs is None:
+        target_lufs = get_configured_target_lufs()
+
     # Build converter first to normalize 5-digit prod_id and prefix
-    temp_converter = DTBConverter(prod_id=prod_id, work_dir=work_dir / prod_id)
+    temp_converter = DTBConverter(prod_id=prod_id, work_dir=work_dir / prod_id, target_lufs=target_lufs)
     full_id = temp_converter.prod_id_full
     dtb_folder_name = f"{full_id}.dtb"
 
@@ -85,7 +106,7 @@ def process_aligned_epub(
     author_spoken, author_spelled = format_spelled_author(creator)
 
     # Build NLS script metadata
-    converter = DTBConverter(prod_id=full_id, work_dir=dtb_dir)
+    converter = DTBConverter(prod_id=full_id, work_dir=dtb_dir, target_lufs=target_lufs)
     metadata_nls = extract_metadata_from_opf("", full_id, audio_files=[])
     metadata_nls.update({
         "title": title,
@@ -190,7 +211,8 @@ def process_single_book(
     tts_gen: TTSGenerator,
     output_dir: Path,
     work_dir: Path,
-    enable_storyteller: bool = True
+    enable_storyteller: bool = True,
+    target_lufs: Optional[float] = None
 ) -> Path:
     """End-to-end driver: syncs epub + audio via Storyteller (if enabled) and converts to NLS DTB."""
     prod_id = book_job["prod_id"]
@@ -225,7 +247,8 @@ def process_single_book(
         tts_gen=tts_gen,
         output_dir=output_dir,
         work_dir=work_dir,
-        raw_audio_dir=raw_audio_dir
+        raw_audio_dir=raw_audio_dir,
+        target_lufs=target_lufs
     )
 
 

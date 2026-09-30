@@ -1,0 +1,13 @@
+FROM registry.gitlab.com/storyteller-platform/storyteller:latest
+
+USER root
+ENV http_proxy=""
+ENV https_proxy=""
+ENV HTTP_PROXY=""
+ENV HTTPS_PROXY=""
+
+RUN npm install -g @storyteller-platform/align@^0.2.4
+
+WORKDIR /data
+
+ENTRYPOINT ["npx", "@storyteller-platform/align"]

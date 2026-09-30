@@ -97,13 +97,16 @@ def start_watcher():
     log_file = PROJECT_ROOT / "data" / "watcher_daemon.log"
     log_file.parent.mkdir(parents=True, exist_ok=True)
     
-    # Launch daemon in the background using the current virtual env python interpreter
+    # Launch daemon in the background using the current virtual env python interpreter with unbuffered output
+    env = os.environ.copy()
+    env["PYTHONUNBUFFERED"] = "1"
     with open(log_file, "a") as f:
         subprocess.Popen(
             [sys.executable, str(watcher_script)],
             stdout=f,
             stderr=f,
             cwd=str(PROJECT_ROOT),
+            env=env,
             preexec_fn=os.setpgrp
         )
 

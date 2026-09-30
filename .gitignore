@@ -33,6 +33,7 @@ data/*.log
 data/*.json
 data/*.csv
 data/debug/
+data/logs/
 data/tts_sandbox/
 data/ingest/*
 !data/ingest/.gitkeep

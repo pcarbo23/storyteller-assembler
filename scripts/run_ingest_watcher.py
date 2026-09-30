@@ -45,6 +45,7 @@ from src.tts_generator import TTSGenerator, extract_metadata_from_opf
 from src.main import process_single_book
 from src.prod_id_manager import ProdIDManager
 from src.tracker import ProductionTracker
+from src.system_cleanup import reset_pipeline_environment
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("ingest_watcher")
@@ -156,6 +157,9 @@ def process_book_job(pair: dict, align_runner: AlignRunner, tts_gen: TTSGenerato
     
     start_time = time.time()
     
+    # Flush Docker VM page caches and run Python GC before starting a job
+    reset_pipeline_environment()
+
     # Thread-safely lease a sequential production ID (e.g. db100000)
     try:
         prod_id = id_manager.lease_id()
@@ -187,6 +191,7 @@ def process_book_job(pair: dict, align_runner: AlignRunner, tts_gen: TTSGenerato
         print(f"[{datetime.now().strftime('%H:%M:%S')}] [ERROR] {err_msg}")
         write_job_status(prod_id, title, "failed_alignment", time.time() - start_time, error=err_msg, start_time=start_time)
         send_macos_notification("Pipeline Failed", f"Alignment failed for '{title}': {e}")
+        reset_pipeline_environment()
         return
 
     # Step 4: Run TTS Generation, Conversion, and Package Build
@@ -214,6 +219,7 @@ def process_book_job(pair: dict, align_runner: AlignRunner, tts_gen: TTSGenerato
         print(f"[{datetime.now().strftime('%H:%M:%S')}] [ERROR] {err_msg}")
         write_job_status(prod_id, title, "failed_conversion", time.time() - start_time, error=err_msg, start_time=start_time)
         send_macos_notification("Pipeline Failed", f"Conversion failed for '{title}': {e}")
+        reset_pipeline_environment()
         return
 
     # Step 5: Compliance Check (ZedVal & NlsVal2)
@@ -300,6 +306,7 @@ def process_book_job(pair: dict, align_runner: AlignRunner, tts_gen: TTSGenerato
             
             write_job_status(prod_id, title, "failed_validation", time.time() - start_time, error=err_msg, start_time=start_time)
             send_macos_notification("Validation Failed", f"Compliance checks failed for '{title}'")
+            reset_pipeline_environment()
             print(f"\n[{datetime.now().strftime('%H:%M:%S')}] [WATCHER] Ready and waiting for next book...")
             return
 
@@ -344,6 +351,7 @@ def process_book_job(pair: dict, align_runner: AlignRunner, tts_gen: TTSGenerato
     prune_completed_status_files(keep_recent=20)
     
     send_macos_notification("Success!", f"Successfully processed '{title}' in {int(total_time)}s.")
+    reset_pipeline_environment()
     print(f"\n[{datetime.now().strftime('%H:%M:%S')}] [WATCHER] Ready and waiting for next book...")
 
 

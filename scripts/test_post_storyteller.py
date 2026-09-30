@@ -28,7 +28,7 @@ if not in_virtualenv:
     sys.exit(1)
 
 from src import __version__
-from src.main import process_aligned_epub
+from src.main import process_aligned_epub, get_configured_target_lufs
 from src.tts_generator import TTSGenerator
 
 
@@ -83,8 +83,10 @@ def main():
     parser.add_argument("-e", "--epub", required=True, help="Path to the post-storyteller media overlay EPUB.")
     parser.add_argument("-s", "--source", required=True, help="Path to the original pre-storyteller source material directory.")
     parser.add_argument("-o", "--output", default="./data/output", help="Directory to save final master DTB.")
+    default_lufs = get_configured_target_lufs()
     parser.add_argument("-p", "--prod-id", help="Production ID. Defaults to name-based ID.")
     parser.add_argument("-t", "--tts", action="store_true", default=False, help="Enable TTS synthesis.")
+    parser.add_argument("-l", "--target-lufs", type=float, default=default_lufs, help=f"Target LUFS loudness level for audio normalization (default: {default_lufs} LUFS per NLS 1202).")
     args = parser.parse_args()
 
     epub_path = Path(args.epub)
@@ -116,7 +118,8 @@ def main():
             tts_gen=tts_gen,
             output_dir=output_dir,
             work_dir=work_dir,
-            raw_audio_dir=source_path
+            raw_audio_dir=source_path,
+            target_lufs=args.target_lufs
         )
     except Exception as e:
         print(f"Pipeline Execution Failed: {e}")

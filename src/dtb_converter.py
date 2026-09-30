@@ -388,12 +388,65 @@ class EPUBOverlayExtractor:
         return parse_ol(ol) if ol is not None else []
 
 
+def normalize_audio_loudness(
+    input_audio: Path,
+    output_wav: Path,
+    target_lufs: float = -21.0,
+    max_peak_db: float = -0.5
+) -> Path:
+    """
+    Measures integrated loudness using pyloudnorm (ITU-R BS.1770-4) and normalizes audio to target LUFS (NLS 1202 compliant).
+    Applies peak limiting protection to prevent clipping.
+    """
+    output_wav = Path(output_wav)
+    output_wav.parent.mkdir(parents=True, exist_ok=True)
+    input_audio = Path(input_audio)
+
+    try:
+        import soundfile as sf
+        import pyloudnorm as pyln
+        import numpy as np
+
+        data, rate = sf.read(str(input_audio))
+        meter = pyln.Meter(rate)
+
+        try:
+            loudness = meter.integrated_loudness(data)
+        except Exception as e:
+            logger.warning(f"Loudness measurement failed for {input_audio.name}: {e}")
+            loudness = -70.0
+
+        if np.isneginf(loudness) or loudness < -70.0:
+            logger.info(f"Audio {input_audio.name} is near silence ({loudness} LUFS); skipping gain amplification.")
+            normalized_audio = data
+        else:
+            normalized_audio = pyln.normalize.loudness(data, loudness, target_lufs)
+            logger.info(f"Normalized {input_audio.name} ({loudness:.2f} LUFS -> {target_lufs:.2f} LUFS)")
+
+        # Peak clipping protection
+        peak = np.max(np.abs(normalized_audio))
+        if peak > 0:
+            max_allowed = 10.0 ** (max_peak_db / 20.0)
+            if peak > max_allowed:
+                peak_db = 20.0 * np.log10(peak)
+                logger.warning(f"Peak clipping protection triggered for {input_audio.name}: peak was {peak_db:.2f} dBFS, scaling to {max_peak_db:.2f} dBFS")
+                normalized_audio = (normalized_audio / peak) * max_allowed
+
+        sf.write(str(output_wav), normalized_audio, rate, subtype="PCM_16")
+        return output_wav
+    except Exception as e:
+        logger.warning(f"pyloudnorm normalization failed ({e}), keeping unnormalized file.")
+        if input_audio.resolve() != output_wav.resolve():
+            shutil.copy(input_audio, output_wav)
+        return output_wav
+
+
 class DTBConverter:
     """
     Converts Storyteller EPUB3 synchronized output to ANSI/NISO Z39.86-2002 compliant DTB with 44.1kHz WAV audio.
     """
 
-    def __init__(self, prod_id: str, work_dir: Path):
+    def __init__(self, prod_id: str, work_dir: Path, target_lufs: Optional[float] = -21.0):
         prod_id_str = str(prod_id).strip()
         # Parse prefix (e.g. db) and number portion
         if prod_id_str.lower().startswith("us-nls-"):
@@ -416,40 +469,56 @@ class DTBConverter:
         self.uid = f"us-nls-{self.prod_id_full}"
         self.work_dir = Path(work_dir)
         self.work_dir.mkdir(parents=True, exist_ok=True)
+        self.target_lufs = target_lufs
 
-
-    def convert_audio_to_wav(self, input_audio: Path, output_wav: Path) -> Path:
+    def convert_audio_to_wav(self, input_audio: Path, output_wav: Path, target_lufs: Optional[float] = None) -> Path:
         """
-        Converts/encodes input audio file (MP3, FLAC, WAV, OPUS, AAC) to standard 16-bit 44.1kHz PCM WAV.
+        Converts/encodes input audio file (MP3, FLAC, WAV, OPUS, AAC) to standard 16-bit 44.1kHz PCM WAV,
+        and applies pyloudnorm loudness normalization to target LUFS (default: self.target_lufs).
         """
         output_wav.parent.mkdir(parents=True, exist_ok=True)
         input_path = Path(input_audio)
         output_path = Path(output_wav)
+        effective_lufs = target_lufs if target_lufs is not None else self.target_lufs
+
+        # Use intermediate WAV path if normalization is to be applied
+        temp_wav = output_path.with_name(f"temp_conv_{output_path.name}")
 
         # Try ffmpeg command line (forces PCM 16-bit 44100Hz mono/stereo WAV)
+        converted = False
         try:
-            cmd = ["ffmpeg", "-y", "-i", str(input_path), "-ar", "44100", "-acodec", "pcm_s16le", str(output_path)]
+            cmd = ["ffmpeg", "-y", "-i", str(input_path), "-ar", "44100", "-acodec", "pcm_s16le", str(temp_wav)]
             res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             if res.returncode == 0:
-                logger.info(f"Converted {input_path.name} -> {output_path.name} via ffmpeg CLI")
-                return output_path
+                logger.debug(f"Decoded {input_path.name} -> {temp_wav.name} via ffmpeg CLI")
+                converted = True
         except Exception as e:
             logger.debug(f"ffmpeg CLI conversion failed: {e}")
 
         # Try pydub fallback if available
-        try:
-            from pydub import AudioSegment
-            audio = AudioSegment.from_file(input_path)
-            audio = audio.set_frame_rate(44100).set_sample_width(2)
-            audio.export(output_path, format="wav")
-            logger.info(f"Converted {input_path.name} -> {output_path.name} via pydub")
-            return output_path
-        except Exception as e:
-            logger.debug(f"pydub conversion failed: {e}")
+        if not converted:
+            try:
+                from pydub import AudioSegment
+                audio = AudioSegment.from_file(input_path)
+                audio = audio.set_frame_rate(44100).set_sample_width(2)
+                audio.export(temp_wav, format="wav")
+                logger.debug(f"Decoded {input_path.name} -> {temp_wav.name} via pydub")
+                converted = True
+            except Exception as e:
+                logger.debug(f"pydub conversion failed: {e}")
 
-        # Fallback: copy file directly
-        shutil.copy(input_path, output_path)
-        logger.info(f"Copied {input_path.name} -> {output_path.name} (fallback)")
+        if not converted:
+            shutil.copy(input_path, temp_wav)
+
+        if effective_lufs is not None:
+            normalize_audio_loudness(temp_wav, output_path, target_lufs=effective_lufs)
+            if temp_wav.exists():
+                temp_wav.unlink(missing_ok=True)
+        else:
+            if temp_wav.exists():
+                shutil.move(str(temp_wav), str(output_path))
+
+        logger.info(f"Converted & normalized {input_path.name} -> {output_path.name}")
         return output_path
 
 
