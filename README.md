@@ -1,6 +1,6 @@
 # Storyteller Assembler
 
-[![Version: 1.0.1](https://img.shields.io/badge/version-1.0.1-blueviolet.svg?style=flat&logo=semver&logoColor=white)](https://semver.org/)
+[![Version: 1.0.2](https://img.shields.io/badge/version-1.0.2-blueviolet.svg?style=flat&logo=semver&logoColor=white)](https://semver.org/)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![Standard: ANSI/NISO Z39.86-2002](https://img.shields.io/badge/standard-ANSI%2FNISO%20Z39.86--2002-green.svg)](http://www.daisy.org/z3986/2005/Z3986-2005.html)
 [![Standard: EPUB 3.0 Media Overlays](https://img.shields.io/badge/standard-EPUB%203.0%20Overlays-informational.svg)](https://www.w3.org/publishing/epub3/epub-mediaoverlays.html)

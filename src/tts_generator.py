@@ -211,6 +211,15 @@ class TTSGenerator:
             logger.info("Initializing TTSGenerator in MOCK mode (use_coqui=False)")
             return
         try:
+            # Defensive check for pkg_resources required by librosa / Coqui TTS
+            try:
+                import pkg_resources
+            except ImportError:
+                raise ImportError(
+                    "Missing 'pkg_resources'. Modern setuptools (>=82.0.0) removed this module. "
+                    "Please run: pip install 'setuptools>=65.0.0,<82.0.0'"
+                )
+
             from TTS.api import TTS
             self.tts = TTS(model_name=model_name)
             logger.info(f"Initialized Coqui TTS engine with model {model_name}")
