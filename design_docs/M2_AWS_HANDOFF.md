@@ -1,98 +1,159 @@
-# Project Handoff & Architecture Guide: Storyteller Assembler
+# Project Handoff & Architecture Guide: Storyteller Assembler (M2 & Cloud Production)
 
-**To:** M2 Apple Silicon Development Team / AI Agent
-**From:** Lead Architect & Project Manager (Intel Baseline Team)
-**Date:** September 30, 2026
-**Subject:** System Architecture, M2 Optimization Strategy, and AWS Migration Path
-
-## 1. Executive Summary
-The **Storyteller Assembler** is a sophisticated, zero-state Python pipeline designed to automate the production of highly regulated, ANSI/NISO Z39.86-2002 compliant Digital Talking Books (DTB) and EPUB3 Media Overlays. 
-
-Currently, the system is fully functional on an Intel Mac baseline (`v1.0.2`). Your immediate mandate on the new M2 Mac is to optimize this software to produce a batch of **1,500 DTBs** at maximum efficiency by tapping into Apple Silicon’s hardware acceleration. 
-
-The M2 is a prototype/production bridge. The **ultimate long-term goal** is to migrate this system to AWS (e.g., EC2/ECS with CUDA or AWS Batch) for infinite scalability.
+**To:** Incoming AI Engineering Agent / Development Team  
+**From:** Antigravity AI Agent & M2 Lead Architect  
+**Date:** October 5, 2026  
+**Subject:** M2 Apple Silicon Production Status, Bug Fixes, Compliance Engine, and AWS Roadmap  
+**Repository Branch:** `m2-production` (Tracking `origin/m2-production`)  
 
 ---
 
-## 2. The Branching Strategy: Why `m2-production`?
-You will be working on a dedicated branch named `m2-production`. **Do not alter the `main` branch or the `v1.0.2` tag.**
+## 1. Executive Summary & Critical Context
 
-*   **Intel Mac Safety:** The Intel Mac is our safe, working fallback. It relies on a Dockerized version of the alignment tool. It must remain untouched so we can produce materials instantly if the M2 encounters downtime.
-*   **M2 Optimization Freedom:** A dedicated branch gives you full freedom to refactor `src/align_runner.py` for native macOS execution, bypassing Docker entirely to unlock the M2's Neural Engine and Metal GPU.
-*   **Shared Codebase Integrity:** 95% of this codebase (TTS, packaging, database, validation) is hardware-agnostic. A branch prevents the nightmare of maintaining two separate hard-forked repositories while isolating hardware-specific execution logic.
+The **Storyteller Assembler** is an event-driven Python pipeline that ingests source trade EPUBs and audiobook narration files to produce dual, highly regulated deliverables:
+1. **ANSI/NISO Z39.86-2002 Digital Talking Book (DTB)**: Master 44.1kHz WAV package (`data/output/<prod_id>.dtb/`) with strict SMIL 1.0 synchronization, hierarchical NCX navigation, and OPF manifest.
+2. **EPUB 3.0 Media Overlay Package**: Conforming EPUB 3 (`data/output/<prod_id>.epub`) with spine-ordered SMIL overlays, refined `us-nls-dbXXXXXX` identifiers, and synchronized navigation.
 
----
-
-## 3. System Architecture & Pipeline Stages
-The pipeline is event-driven via `scripts/run_ingest_watcher.py` or a Streamlit GUI. It processes raw assets through 7 distinct stages:
-
-1.  **Ingestion (`src/ingestion.py`):** Scans for directories containing exactly one EPUB and its corresponding audio narration.
-2.  **Forced Alignment (`src/align_runner.py`):** The core bottleneck. Currently uses `@storyteller-platform/align` (a Node.js wrapper for `whisper.cpp`) to perform speech-to-text and Levenshtein distance matching against the EPUB XHTML, generating synchronized SMIL files.
-3.  **Metadata Enrichment (`src/prod_id_manager.py`, `src/external/metadata_client.py`):** Leases sequential `dbXXXXXX` IDs and fetches bibliographic data via Libex, Audnexus, Open Library, etc.
-4.  **Neural TTS Generation (`src/tts_generator.py`):** Generates mandatory NLS announcements (e.g., phonetically spelling author names). Uses a **Two-Pass Convergence Algorithm** to ensure exact 5-minute rounding compliance for audio durations.
-5.  **Master DTB & EPUB3 Packaging (`src/dtb_converter.py`, `src/epub_nls_editor.py`):** Transcodes all audio to 44.1kHz WAV, builds strict Z39.86-2002 OPF/NCX/SMIL manifests, and strict EPUB3 Media Overlays (`epub_MED_015` compliance).
-6.  **Compliance Verification (`AllVal.jar`):** Executes Java-based `ZedVal` and `NlsVal2` compliance checks, generating XML reports.
-7.  **Audit Tracking (`src/tracker.py`):** Logs the entire run, durations, and compliance states to SQLite and CSV.
+### Current Operating State (as of October 5, 2026)
+- The pipeline on branch **`m2-production`** is **fully operational, optimized, and verified** on Apple Silicon M2.
+- **Hardware Acceleration**: Alignment execution time dropped from **12 minutes (Intel baseline) to ~2 minutes (M2 native)** via Metal GPU/ANE acceleration.
+- **Bug Fixes Applied**:
+  - TTS deadlock & thread freezing resolved via subprocess isolation.
+  - Tagless WAV duration truncation bug resolved via standard `wave` library parsing.
+  - Multi-element composite chapter headings bug resolved in DTB and EPUB navigation.
+- **Compliance Validation**: Dual validation (`ZedVal` & `NlsVal2` v4.08) runs automatically on all productions, producing 100% clean passes (`<pass>true</pass>`) with reports archived to `data/reports/`.
+- **Machine Rebuild Alert**: This M2 machine is scheduled for an ITS rebuild. **All code, tests, documentation, and configuration have been committed and pushed to GitHub on branch `m2-production`**.
 
 ---
 
-## 4. Repository Structure & Zero-State Design
-The project uses a **Zero-State Architecture**. No proprietary data, test books, databases (`*.db`), or output packages are stored in Git.
+## 2. Onboarding on a Fresh / Rebuilt Machine
 
-*   `src/`: Core Python pipeline modules.
-*   `scripts/`: Entry points (`run_ingest_watcher.py`, `test_post_storyteller.py`).
-*   `docker/`: Legacy Dockerfiles (currently used by Intel/Linux for alignment).
-*   `config/`, `design_docs/`: Configuration and architecture references.
-*   `data/`: **(Ignored in Git)** The working directory. Contains `/ingest`, `/processing`, `/output`, `/reports`, and `production_history.db`. The DB and folders are auto-initialized on the first run.
+If you are a new AI instance resuming work on a freshly rebuilt Mac (or remote workstation), follow these exact onboarding steps:
 
----
+### Step 1: Clone and Checkout Branch
+```bash
+git clone git@github.com:pcarbo23/storyteller-assembler.git
+cd storyteller-assembler
+git checkout m2-production
+```
 
-## 5. Technology Stack
-*   **Core Logic:** Python 3.9+
-*   **Alignment Engine:** Node.js, `@storyteller-platform/align` / `ghost-story` (utilizing Whisper.cpp).
-*   **Media Processing:** FFmpeg (required on host machine).
-*   **Validation:** Java (JRE required for `AllVal.jar`).
-*   **Data Storage:** SQLite3 (Local tracker) & CSV.
-*   **UI:** Streamlit.
+### Step 2: Install System Dependencies via Homebrew
+```bash
+brew install ffmpeg espeak-ng openjdk node
+```
 
----
+### Step 3: Install Native Aligner CLI Globally
+```bash
+# Allow script execution for storyteller's binary dependencies
+npm install -g --dangerously-allow-all-scripts @storyteller-platform/align@0.2.4
 
-## 6. The Immediate M2 Challenge: Bypassing Docker
-**The Problem:** The Intel machine runs the aligner inside a Linux Docker container (`auto_story_pipe_aligner:latest`). On an M2 Mac, Docker runs inside a Linux virtual machine. Apple does **not** expose the Apple Neural Engine (ANE) or Metal GPU to Linux VMs. Consequently, the M2 is forced into emulated CPU execution (taking ~491 seconds per book instead of an expected ~45 seconds).
+# Verify CLI is responsive
+align --help
+```
 
-**Your First Task on the M2:**
-1.  **Install Host Dependencies:** Ensure Node.js 20/24+, FFmpeg, and Java are installed natively via Homebrew.
-2.  **Global NPM Install (With Scripts Allowed):**
-    In npm v11/v12, `--allow-scripts` requires an explicit package list (without semver ranges) or global configuration. Do **not** pass bare `--allow-scripts <pkg@^semver>` because npm treats the package argument as the script list, causing an `ENOENT: package.json` failure.
+### Step 4: Configure Validator Environment Variable
+The software standardizes on **`NLS_VALIDATOR_JAR`** for the proprietary NLS validation suite (`AllVal.jar`):
+```bash
+# Append to shell profile
+echo 'export NLS_VALIDATOR_JAR="/Users/phca/validators/AllVal.jar"' >> ~/.zshrc
+export NLS_VALIDATOR_JAR="/Users/phca/validators/AllVal.jar"
+```
+*(Note: If `AllVal.jar` is missing, the pipeline gracefully skips compliance verification and records status as `"skipped"` without failing production).*
 
-    Use either of the following commands:
-    ```bash
-    # Method A: Set the allow-scripts config for storyteller dependencies (Recommended)
-    npm config set allow-scripts=@storyteller-platform/align,esbuild,onnxruntime-node,protobufjs --location=user
-    npm install -g @storyteller-platform/align@0.2.4
+### Step 5: Run Automated Environment Setup
+```bash
+./setup_env.sh
+```
+This script audits Python, initializes `.venv`, installs `requirements.txt`, checks system binaries (`ffmpeg`, `espeak-ng`, `java`, `docker`), and verifies `NLS_VALIDATOR_JAR`.
 
-    # Method B: One-liner allowing script execution for this install
-    npm install -g --dangerously-allow-all-scripts @storyteller-platform/align@0.2.4
-    ```
-
-    **Verification Step on M2:**
-    Verify the CLI is installed and responsive:
-    ```bash
-    align --help
-    ```
-3.  **Refactor `src/align_runner.py` (Dual-Mode):**
-    Modify the Python code to dynamically check if it is running on macOS (`sys.platform == 'darwin'`) with Node installed. If so, execute `npx @storyteller-platform/align` natively via `subprocess`. 
-    When run natively on the M2, `ghost-story` will automatically download the `darwin-arm64-coreml` Whisper binary and the ANE Core ML models. This skips Docker entirely, utilizing the 16-Core ANE and 38-Core GPU, slashing alignment time by 10x.
+### Step 6: Verify Test Suite
+```bash
+.venv/bin/pytest
+```
+**Expected baseline:** 36 passed, 7 skipped (skipped tests require ~37GB external test materials).
 
 ---
 
-## 7. The AWS Long-Term Vision
-Do not hardcode macOS-only logic in a way that breaks Linux compatibility. 
-By creating a "Dual-Mode" `AlignRunner` (Native vs. Docker), you are actually building the exact adapter pattern we need for AWS. 
-When we move to AWS (e.g., an EC2 `g4dn` instance with an NVIDIA GPU):
-*   The system will detect Linux and fallback to Docker or a Native CUDA execution path.
-*   The runner abstraction will effortlessly swap `darwin-arm64-coreml` commands for AWS `linux-x64-cuda` commands.
+## 3. Key Architecture & Recent Bug Fixes
 
-Keep the pipeline modular. Optimize aggressively for the M2's hardware right now, but maintain the architectural boundaries that make this system cloud-ready. 
+### A. Dual-Mode Forced Alignment (`src/align_runner.py`)
+- **macOS (Native Mode)**: When running on macOS (`sys.platform == 'darwin'`) with `align` or `npx` available, `AlignRunner` invokes `align` directly on the host. This taps directly into Apple Silicon's 16-Core Neural Engine (ANE) and Metal GPU, executing alignment in ~2 minutes per book.
+- **Linux/CI Fallback (Docker Mode)**: When running on Linux, it automatically launches transient containers using `@storyteller-platform/align` inside Docker.
+- **Watcher & Dashboard Integration**: `scripts/run_ingest_watcher.py` and `scripts/dashboard.py` check `is_native_align_mode()`; if native alignment is ready, the system reports status as `online` even if Docker Desktop is stopped.
 
-Good luck with the 1,500 DTB production run.
+### B. Subprocess TTS Worker & Timeout Guard (`src/tts_generator.py`, `scripts/generate_tts_audio.py`)
+- **Prior Issue**: During prolonged batch runs, Coqui TTS / PyTorch synthesis occasionally locked up during closing credits rendering, causing the watcher thread to hang indefinitely.
+- **Resolution**: TTS audio generation is isolated into `scripts/generate_tts_audio.py` executed via `subprocess.run` with a configurable timeout (180s) and automatic retry fallback.
+
+### C. TTS Audio Duration & Proportional Drift Fix (`src/tts_generator.py`)
+- **Prior Issue**: Uncompressed PCM WAV files generated by `ffmpeg` have no ID3 tags. `mutagen.File(wav_path)` returned a `mutagen.wave.WAVE` object which evaluated to `False` in boolean contexts (`if audio and audio.info:`). As a result, total audio duration defaulted to `5.0s`, compressing announcement step boundaries by ~30x (e.g. `docTitle` 21ms, `docAuthor` 74ms).
+- **Resolution**:
+  - Replaced mutagen WAV duration calculation with Python's standard `wave` module (`wave.open`).
+  - Synthesizes announcement steps with explicit millisecond duration tracking and 400ms inter-step silence buffers, guaranteeing mathematically exact `clipBegin` and `clipEnd` boundaries in DTB NCX navigation.
+
+### D. Multi-Element Chapter Headings Bug Fix (`src/dtb_converter.py`, `src/epub_nls_editor.py`)
+- **Prior Issue**: When publishers structure chapter headings across multiple HTML tags (e.g., `<h1 class="chap_num">Chapter 1</h1>` followed by `<h1 class="chap_head">GET FIT WITH SANTA!</h1>`), the aligner created separate sentence spans for each. Previously, `resolve_node_audio` matched only the first span (`Chapter 1`), truncating the audio clip before the chapter title was spoken, and leaving navigation labels incomplete.
+- **Resolution**:
+  - In `src/dtb_converter.py`: Discovers adjacent multi-span heading elements at the start of chapter sections, merges them into composite labels (e.g., `"Chapter 1: Get Fit With Santa!"`), and extends the audio clip from the start of the first span (`clipBegin`) to the end of the last span (`clipEnd`).
+  - In `src/epub_nls_editor.py`: Added `_synchronize_navigation(temp_dir)` to update both `toc.ncx` and `nav.xhtml` inside conforming EPUB deliverables with composite chapter titles.
+
+### E. Dual Deliverables Structure & NlsVal2 Extraneous File Fix (`src/main.py`)
+- **Prior Issue**: The conforming EPUB was being written to `dtb_dir / f"{full_id}.epub"` (inside the DTB folder). When `NlsVal2` inspected the DTB package against its OPF manifest, it failed with:
+  `nlsext_opf_extraneousFile: File named "dbXXXXXX.epub" exists in the input but is not listed in the manifest.`
+- **Resolution**:
+  - In `src/main.py`, the conforming EPUB is output to `output_dir / f"{full_id}.epub"`, **parallel** to `output_dir / f"{full_id}.dtb/`.
+  - Result: Both `ZedVal` and `NlsVal2` pass with `<pass>true</pass>` and zero errors across all productions.
+
+---
+
+## 4. Pipeline Configuration & Data Stores
+
+| Component | Location | Description |
+| :--- | :--- | :--- |
+| **Production ID Leaser** | `config/production_config.json` | Controls sequential ID leasing (`prefix: "db"`, `next_value: 100106`). |
+| **Audit Database** | `data/production_history.db` | SQLite archive auto-migrated on first run. Logs IDs, titles, ISBNs, `zedval_status`, `nlsval_status`, and `validator_version`. |
+| **Flat Audit Log** | `data/production_log.csv` | Append-only CSV mirror of production runs. |
+| **Validation Reports** | `data/reports/` | Preserves `<prod_id>_ZedVal.xml`, `<prod_id>_ZedVal.log`, `<prod_id>_NlsVal2.xml`, `<prod_id>_NlsVal2.log`. |
+| **Input Queue** | `data/ingest/` | Drop folder for incoming unaligned book pairs (`.epub` + audio files). |
+| **Deliverables** | `data/output/` | Final deliverables: `<prod_id>.dtb/` and `<prod_id>.epub`. |
+| **Archived Holdings** | `~/nlsbpd/output_holding/` | Holds legacy/backfilled runs (`db100065`–`db100080`). |
+
+---
+
+## 5. Execution Modes
+
+### 1. Ingestion Watcher (Daemon)
+Monitors `data/ingest/` continuously and processes books through alignment, TTS synthesis, packaging, and validation:
+```bash
+source .venv/bin/activate
+python scripts/run_ingest_watcher.py
+```
+
+### 2. Streamlit Web Dashboard (GUI)
+Interactive dashboard for monitoring the live queue, inspecting production history, and starting/stopping the watcher:
+```bash
+source .venv/bin/activate
+streamlit run scripts/dashboard.py
+```
+*(Or double-click `launch_dashboard.command` in macOS Finder).*
+
+### 3. Post-Alignment Test Tool
+Runs DTB conversion, NLS announcements, and compliance validation directly on pre-aligned EPUBs without re-running alignment:
+```bash
+source .venv/bin/activate
+python scripts/test_post_storyteller.py -e "<path_to_aligned.epub>" -s "<path_to_source_dir>" -p "dbXXXXXX"
+```
+
+---
+
+## 6. AWS Cloud Migration Roadmap
+
+When migrating from this M2 prototype environment to AWS (EC2/ECS or AWS Batch):
+1. **Container Alignment**:
+   - `src/align_runner.py` already includes Docker execution logic (`_align_docker`).
+   - For GPU-accelerated cloud alignment, configure an NVIDIA CUDA container image with `whisper.cpp` (`linux-x64-cuda`).
+2. **Validator Distribution**:
+   - Follow **Strategy 1** in [design_docs/VALIDATOR_DISTRIBUTION_STRATEGIES.md](file:///Users/phca/dev_projects/storyteller-assembler/design_docs/VALIDATOR_DISTRIBUTION_STRATEGIES.md) to bootstrap `AllVal.jar` from private S3 storage (`s3://<bucket>/validators/AllVal.jar`).
+3. **Storage Tiering**:
+   - Replace local `data/ingest/` and `data/output/` mounts with S3 bucket triggers (e.g., S3 event notifications -> SQS queue -> worker instance).
+   - Migrate `data/production_history.db` to Amazon RDS PostgreSQL or DynamoDB for distributed production tracking.
