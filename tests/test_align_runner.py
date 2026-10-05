@@ -65,7 +65,7 @@ class TestAlignRunner(unittest.TestCase):
         out_epub = self.project_root / "data" / "processing" / "test_aligned.epub"
 
         # Mock out_epub.exists() so post-condition check passes
-        with patch.object(Path, "exists", return_value=True):
+        with patch.object(Path, "exists", return_value=True), patch("sys.platform", "linux"):
             self.runner.align(epub, audio_dir, out_epub, engine="whisper.cpp", model="tiny.en")
 
         cmd = mock_popen.call_args[0][0]

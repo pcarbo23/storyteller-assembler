@@ -43,3 +43,29 @@ def test_render_announcement_text():
 
     assert any("End of Of Mice and Men by John Steinbeck" in line["text"] for line in closing)
     assert any("Published by: Penguin Books" in line["text"] for line in closing)
+
+
+def test_get_audio_duration_seconds(tmp_path):
+    import wave
+    from src.tts_generator import get_audio_duration_seconds, calculate_audio_duration
+
+    # Generate a genuine WAV file with 1 second of audio (44100 frames at 44100 Hz, 16-bit mono)
+    wav_path = tmp_path / "test_1sec.wav"
+    with wave.open(str(wav_path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(44100)
+        w.writeframes(b"\x00\x00" * 44100)
+
+    dur = get_audio_duration_seconds(wav_path)
+    assert dur is not None
+    assert round(dur, 2) == 1.00
+
+    # Test 5-minute rounding
+    # 3600 seconds = 1 hour, 0 minutes
+    h, m = calculate_audio_duration(3600)
+    assert h == 1 and m == 0
+    # 3900 seconds = 1 hour, 5 minutes
+    h, m = calculate_audio_duration(3900)
+    assert h == 1 and m == 5
+

@@ -121,8 +121,13 @@ def process_aligned_epub(
         "nls_annotation": description.strip(),
         "subjects": subjects,
         "author_names_and_spelling": f"{author_spoken}, {author_spelled}",
-        "author_spelling_only": author_spelled,
-        "navigation_levels": converter.calculate_max_depth(converter.prune_nav_tree(epub_data.get("nav_tree", []), epub_data.get("smil_segments", [])))
+        "navigation_levels": converter.calculate_max_depth(
+            converter.prune_nav_tree(
+                epub_data.get("nav_tree", []),
+                epub_data.get("smil_segments", []),
+                chapter_headings=epub_data.get("chapter_headings")
+            )
+        )
     })
 
 
@@ -174,14 +179,14 @@ def process_aligned_epub(
         closing_timing=closing_timing
     )
 
-    # 3b. Generate conforming NLS EPUB Media Overlay package (<prod_id>.epub) parallel to Z39 OPF
+    # 3b. Generate conforming NLS EPUB Media Overlay package (<prod_id>.epub) parallel to Z39 DTB
     try:
         nls_editor = NLSEPUBEditor()
-        nls_epub_path = dtb_dir / f"{full_id}.epub"
-        logger.info(f"Generating conforming NLS EPUB: {nls_epub_path}")
+        nls_epub_temp = book_work_dir / f"{full_id}.epub"
+        logger.info(f"Generating conforming NLS EPUB: {nls_epub_temp}")
         nls_editor.edit_aligned_epub(
             input_epub=epub_path,
-            output_epub=nls_epub_path,
+            output_epub=nls_epub_temp,
             prod_id=full_id
         )
     except Exception as e:
@@ -195,11 +200,17 @@ def process_aligned_epub(
         shutil.rmtree(final_dtb_destination)
     shutil.copytree(dtb_dir, final_dtb_destination)
 
+    # Deliver conforming EPUB to Output Location parallel to Master DTB folder
+    final_epub_destination = output_dir / f"{full_id}.epub"
+    if nls_epub_temp.exists():
+        shutil.copy2(nls_epub_temp, final_epub_destination)
+        logger.info(f"Delivered conforming NLS EPUB: {final_epub_destination}")
+
     # 5. Clean up temporary working directory to preserve disk space
     shutil.rmtree(book_work_dir, ignore_errors=True)
     logger.info(f"Cleaned up temporary working directory: {book_work_dir}")
 
-    logger.info(f"=== Successfully completed master WAV DTB pipeline for '{title}'! Deliverable: {final_dtb_destination} ===")
+    logger.info(f"=== Successfully completed master WAV DTB pipeline for '{title}'! Deliverables: {final_dtb_destination}, {final_epub_destination} ===")
     return final_dtb_destination
 
 

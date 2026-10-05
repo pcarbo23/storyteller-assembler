@@ -246,3 +246,84 @@ def test_smil_manifest_and_metadata_spine_ordering(tmp_path):
         assert actual_dur_metas[0] == "c001_overlay"
         assert actual_dur_metas[-1] == "c037_overlay"
 
+
+def test_synchronize_navigation_synthetic(tmp_path):
+    """Test that NLSEPUBEditor synchronizes composite titles in toc.ncx and nav.xhtml."""
+    input_epub = tmp_path / "synthetic.epub"
+    output_epub = tmp_path / "output.epub"
+
+    container_xml = """<?xml version="1.0"?>
+    <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+        <rootfiles>
+            <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+        </rootfiles>
+    </container>"""
+
+    content_opf = """<?xml version="1.0" encoding="utf-8"?>
+    <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
+        <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+            <dc:identifier id="pub-id">12345</dc:identifier>
+            <dc:title>Test Book</dc:title>
+            <dc:language>en</dc:language>
+        </metadata>
+        <manifest>
+            <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+            <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+            <item id="c1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+        </manifest>
+        <spine toc="ncx">
+            <itemref idref="c1"/>
+        </spine>
+    </package>"""
+
+    toc_ncx = """<?xml version="1.0" encoding="utf-8"?>
+    <ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
+        <head><meta name="dtb:uid" content="12345"/></head>
+        <docTitle><text>Test Book</text></docTitle>
+        <navMap>
+            <navPoint id="p1" playOrder="1">
+                <navLabel><text>Get Fit with Santa!</text></navLabel>
+                <content src="ch1.xhtml#ch1"/>
+            </navPoint>
+        </navMap>
+    </ncx>"""
+
+    nav_xhtml = """<?xml version="1.0" encoding="utf-8"?>
+    <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+        <body>
+            <nav epub:type="toc" id="toc">
+                <ol>
+                    <li><a href="ch1.xhtml#ch1">Get Fit with Santa!</a></li>
+                </ol>
+            </nav>
+        </body>
+    </html>"""
+
+    ch1_xhtml = """<?xml version="1.0" encoding="utf-8"?>
+    <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+        <body>
+            <h1 class="chap_num" id="ch1">Chapter 1</h1>
+            <h1 class="chap_head">GET FIT WITH SANTA!</h1>
+            <p>Story text here.</p>
+        </body>
+    </html>"""
+
+    with zipfile.ZipFile(input_epub, "w") as z:
+        z.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
+        z.writestr("META-INF/container.xml", container_xml)
+        z.writestr("OEBPS/content.opf", content_opf)
+        z.writestr("OEBPS/toc.ncx", toc_ncx)
+        z.writestr("OEBPS/nav.xhtml", nav_xhtml)
+        z.writestr("OEBPS/ch1.xhtml", ch1_xhtml)
+
+    editor = NLSEPUBEditor()
+    editor.edit_aligned_epub(input_epub, output_epub, "db999999")
+
+    with zipfile.ZipFile(output_epub, "r") as z:
+        ncx_out = z.read("OEBPS/toc.ncx").decode("utf-8")
+        assert "Chapter 1: Get Fit With Santa!" in ncx_out
+
+        nav_out = z.read("OEBPS/nav.xhtml").decode("utf-8")
+        assert "Chapter 1: Get Fit With Santa!" in nav_out
+
+

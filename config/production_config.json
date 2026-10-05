@@ -2,6 +2,6 @@
   "prefix": "db",
   "range_start": 100000,
   "range_end": 999999,
-  "next_value": 100064,
+  "next_value": 100106,
   "target_lufs": -21.0
 }

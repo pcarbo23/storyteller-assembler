@@ -103,6 +103,7 @@ def start_watcher():
     with open(log_file, "a") as f:
         subprocess.Popen(
             [sys.executable, str(watcher_script)],
+            stdin=subprocess.DEVNULL,
             stdout=f,
             stderr=f,
             cwd=str(PROJECT_ROOT),
@@ -409,8 +410,19 @@ def render_dashboard():
                     for aj in active_jobs:
                         aj_id = aj["Production ID"]
                         if st.button(f"Force-Kill Job: {aj_id}", key=f"kill_{aj_id}", use_container_width=True):
-                            st.info(f"Stopping container for job {aj_id}...")
-                            subprocess.run(["docker", "rm", "-f", f"align_{aj_id}"], capture_output=True)
+                            st.info(f"Stopping processes/container for job {aj_id}...")
+                            # 1. Terminate Docker container if running in containerized mode
+                            try:
+                                subprocess.run(["docker", "rm", "-f", f"align_{aj_id}"], capture_output=True, timeout=5)
+                            except Exception:
+                                pass
+
+                            # 2. Terminate native alignment, TTS, or ffmpeg processes on macOS host
+                            for pattern in [f"align.*{aj_id}", f"generate_tts_audio.py.*{aj_id}", f"ffmpeg.*{aj_id}"]:
+                                try:
+                                    subprocess.run(["pkill", "-9", "-f", pattern], capture_output=True)
+                                except Exception:
+                                    pass
                             
                             # Update status file
                             js_file = PROJECT_ROOT / "data" / "processing" / f"{aj_id}_status.json"

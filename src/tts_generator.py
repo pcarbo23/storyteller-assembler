@@ -84,6 +84,28 @@ def format_spelled_author(author_name: str) -> tuple[str, str]:
     return author_name, spelled_full
 
 
+def get_audio_duration_seconds(audio_path: Path) -> Optional[float]:
+    """Returns the precise duration in seconds of a WAV, MP3, FLAC or other audio file."""
+    audio_path = Path(audio_path)
+    if not audio_path.exists():
+        return None
+    try:
+        if audio_path.suffix.lower() == ".wav":
+            import wave
+            with wave.open(str(audio_path), "rb") as w:
+                return w.getnframes() / float(w.getframerate())
+    except Exception:
+        pass
+    try:
+        import mutagen
+        f = mutagen.File(str(audio_path))
+        if f is not None and f.info and hasattr(f.info, "length") and f.info.length is not None:
+            return float(f.info.length)
+    except Exception:
+        pass
+    return None
+
+
 def calculate_audio_duration(audio_files_or_seconds: Any) -> tuple[int, int]:
     """Calculate total reading time in hours and minutes (rounded to nearest 5 mins)."""
     if isinstance(audio_files_or_seconds, (int, float)):
@@ -91,12 +113,11 @@ def calculate_audio_duration(audio_files_or_seconds: Any) -> tuple[int, int]:
     else:
         total_seconds = 0.0
         for audio_file in audio_files_or_seconds:
-            try:
-                audio = mutagen.File(str(audio_file))
-                if audio and audio.info:
-                    total_seconds += audio.info.length
-            except Exception as e:
-                logger.warning(f"Could not read audio length for {audio_file}: {e}")
+            dur = get_audio_duration_seconds(audio_file)
+            if dur is not None:
+                total_seconds += dur
+            else:
+                logger.warning(f"Could not read audio length for {audio_file}")
 
     hours = int(total_seconds // 3600)
     minutes = int(round((total_seconds % 3600) / 60.0 / 5.0) * 5)
@@ -204,11 +225,19 @@ def render_announcement_text(metadata: Dict[str, Any], section_prefix: str) -> L
 class TTSGenerator:
     """Generates WAV announcement audio files using Coqui TTS engine."""
 
-    def __init__(self, model_name: str = "tts_models/en/ljspeech/vits", use_coqui: bool = True):
+    def __init__(self, model_name: str = "tts_models/en/ljspeech/vits", use_coqui: bool = True, lazy_init: bool = True):
+        self.model_name = model_name
         self.use_coqui = use_coqui
         self.tts = None
         if not use_coqui:
             logger.info("Initializing TTSGenerator in MOCK mode (use_coqui=False)")
+            return
+        if not lazy_init:
+            self._ensure_tts_loaded()
+
+    def _ensure_tts_loaded(self) -> None:
+        """Load Coqui TTS model into memory on demand."""
+        if self.tts is not None or not self.use_coqui:
             return
         try:
             # Defensive check for pkg_resources required by librosa / Coqui TTS
@@ -221,8 +250,8 @@ class TTSGenerator:
                 )
 
             from TTS.api import TTS
-            self.tts = TTS(model_name=model_name)
-            logger.info(f"Initialized Coqui TTS engine with model {model_name}")
+            self.tts = TTS(model_name=self.model_name)
+            logger.info(f"Initialized Coqui TTS engine with model {self.model_name}")
         except Exception as e:
             logger.error(f"Failed to initialize Coqui TTS: {e}")
             raise RuntimeError(f"Coqui TTS initialization failed: {e}")
@@ -244,7 +273,12 @@ class TTSGenerator:
             cmd = [sys.executable, str(helper_script), str(output_path), serialized_steps]
             
             logger.info(f"Delegating TTS generation to isolated subprocess for: {output_path.name}")
-            res = subprocess.run(cmd, capture_output=True, text=True)
+            try:
+                res = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=180)
+            except subprocess.TimeoutExpired as e:
+                logger.error(f"TTS subprocess timed out after 180s for {output_path.name}")
+                raise RuntimeError(f"TTS generation timed out for '{output_path.name}' after 180 seconds") from e
+
             if res.returncode != 0:
                 err_msg = res.stderr.strip() or res.stdout.strip() or f"Process exited with code {res.returncode}"
                 logger.error(f"TTS subprocess execution failed for {output_path.name}: {err_msg}")
@@ -292,58 +326,118 @@ class TTSGenerator:
             else:
                 step_items.append({"step_id": "step", "text": str(step)})
 
-        text_strings = [s["text"] for s in step_items]
-        full_text = " . ".join(text_strings)
-
         timing_info = {}
 
         if not self.use_coqui:
-            # Mock mode: write a dummy WAV file and return default timing
-            header = b"RIFF\x64\x9c\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00\x40\x1f\x00\x00\x40\x1f\x00\x00\x01\x00\x08\x00data\x40\x9c\x00\x00"
-            output_path.write_bytes(header + b"\x80" * 40000)
-            return {"_total_duration": 25.0}
+            # Mock mode: simulate realistic step timings with 0.4s pauses and write a valid WAV file
+            import wave
+            sample_rate = 44100
+            curr_time = 0.0
+            pause_dur = 0.4
 
+            for item in step_items:
+                text_len = len(item.get("text", ""))
+                dur = max(1.5, text_len / 15.0)
+                start_t = curr_time
+                end_t = curr_time + dur
+                timing_info[item["step_id"]] = {
+                    "start": round(start_t, 3),
+                    "end": round(end_t, 3),
+                    "duration": round(dur, 3)
+                }
+                curr_time = end_t + pause_dur
+
+            total_dur = max(curr_time - pause_dur, 25.0)
+            timing_info["_total_duration"] = round(total_dur, 3)
+
+            num_frames = int(total_dur * sample_rate)
+            with wave.open(str(output_path), "wb") as w:
+                w.setnchannels(1)
+                w.setsampwidth(2)
+                w.setframerate(sample_rate)
+                w.writeframes(b"\x00\x00" * min(num_frames, 44100))
+            return timing_info
+
+        self._ensure_tts_loaded()
         if not self.tts:
             raise RuntimeError("Coqui TTS engine is not initialized.")
 
-        # Generate audio using Coqui TTS
-        temp_raw_wav = output_path.parent / f"coqui_raw_{output_path.name}"
+        import numpy as np
+        import soundfile as sf
+
         speaker = self.tts.speakers[1] if (hasattr(self.tts, "speakers") and self.tts.speakers and len(self.tts.speakers) > 1) else None
-        if speaker:
-            self.tts.tts_to_file(text=full_text, speaker=speaker, file_path=str(temp_raw_wav))
+        sr = getattr(self.tts.synthesizer, "output_sample_rate", 22050)
+        pause_dur = 0.4  # 400ms pause between announcement steps
+        pause_samples = int(pause_dur * sr)
+        pause_arr = np.zeros(pause_samples, dtype=np.float32)
+
+        audio_chunks = []
+        current_samples = 0
+
+        for idx, item in enumerate(step_items):
+            step_text = item["text"].strip()
+            if not step_text:
+                continue
+
+            if speaker:
+                step_audio = self.tts.tts(text=step_text, speaker=speaker)
+            else:
+                step_audio = self.tts.tts(text=step_text)
+
+            step_arr = np.array(step_audio, dtype=np.float32)
+            step_samples = len(step_arr)
+
+            start_t = current_samples / float(sr)
+            end_t = (current_samples + step_samples) / float(sr)
+            dur_t = step_samples / float(sr)
+
+            timing_info[item["step_id"]] = {
+                "start": round(start_t, 3),
+                "end": round(end_t, 3),
+                "duration": round(dur_t, 3)
+            }
+
+            audio_chunks.append(step_arr)
+            current_samples += step_samples
+
+            # Append silence buffer between steps (except after the final step)
+            if idx < len(step_items) - 1:
+                audio_chunks.append(pause_arr)
+                current_samples += pause_samples
+
+        if audio_chunks:
+            full_audio = np.concatenate(audio_chunks)
         else:
-            self.tts.tts_to_file(text=full_text, file_path=str(temp_raw_wav))
+            full_audio = np.zeros(sr, dtype=np.float32)
+
+        # Write intermediate raw wav
+        temp_raw_wav = output_path.parent / f"coqui_raw_{output_path.name}"
+        sf.write(str(temp_raw_wav), full_audio, sr)
 
         # Ensure output is converted to 44.1kHz 16-bit PCM WAV for NLS compliance
-        cmd_ffmpeg = ["ffmpeg", "-y", "-i", str(temp_raw_wav), "-ar", "44100", "-acodec", "pcm_s16le", str(output_path)]
-        res_ffmpeg = subprocess.run(cmd_ffmpeg, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        # Use -nostdin and stdin=DEVNULL to prevent SIGTTOU / SIGTTIN suspensions when running under background daemons
+        cmd_ffmpeg = [
+            "ffmpeg", "-nostdin", "-y", "-i", str(temp_raw_wav),
+            "-ar", "44100", "-acodec", "pcm_s16le", str(output_path)
+        ]
+        try:
+            res_ffmpeg = subprocess.run(cmd_ffmpeg, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
+        except subprocess.TimeoutExpired as e:
+            temp_raw_wav.unlink(missing_ok=True)
+            raise RuntimeError(f"ffmpeg conversion of Coqui TTS audio timed out after 60s for {output_path.name}") from e
+
         temp_raw_wav.unlink(missing_ok=True)
 
         if res_ffmpeg.returncode != 0:
             raise RuntimeError(f"ffmpeg conversion of Coqui TTS audio failed: {res_ffmpeg.stderr.decode()}")
 
-        # Total duration of Coqui audio
-        total_dur = 5.0
-        try:
-            audio = mutagen.File(str(output_path))
-            if audio and audio.info:
-                total_dur = audio.info.length
-        except Exception:
-            pass
+        exact_total_dur = get_audio_duration_seconds(output_path) or (len(full_audio) / float(sr))
+        timing_info["_total_duration"] = round(exact_total_dur, 3)
 
-        # Proportional step timing calculation based on generated Coqui audio
-        total_chars = max(1, len(full_text))
-        curr_time = 0.0
-        for item in step_items:
-            step_len = len(item["text"])
-            step_dur = (step_len / total_chars) * total_dur
-            start_t = curr_time
-            end_t = curr_time + step_dur
-            timing_info[item["step_id"]] = {"start": start_t, "end": end_t, "duration": step_dur}
-            curr_time = end_t
-        timing_info["_total_duration"] = total_dur
-
-        logger.info(f"Generated Coqui TTS announcement audio file ({output_path.name}, total={timing_info.get('_total_duration', 0.0):.2f}s)")
+        logger.info(
+            f"Generated Coqui TTS announcement audio file ({output_path.name}, "
+            f"total={timing_info.get('_total_duration', 0.0):.2f}s, steps={len(timing_info)-1})"
+        )
         return timing_info
 
 

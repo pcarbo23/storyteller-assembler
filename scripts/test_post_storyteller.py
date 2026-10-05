@@ -132,10 +132,10 @@ def main():
     opf_path = opf_file[0]
     print(f"Generated OPF: {opf_path}")
 
-    print("\n--- 2. Starting Compliance Testing (Validators) ---")
-    allval_jar = PROJECT_ROOT / "test_material" / "AllVal.jar"
-    if not allval_jar.exists():
-        print(f"Warning: AllVal.jar not found at {allval_jar}. Skipping compliance execution.")
+    allval_jar_env = os.environ.get("NLS_VALIDATOR_JAR")
+    allval_jar = Path(allval_jar_env).expanduser().resolve() if allval_jar_env else None
+    if not allval_jar or not allval_jar.exists():
+        print(f"Warning: NLS_VALIDATOR_JAR environment variable not set or file not found ({allval_jar}). Skipping compliance execution.")
         sys.exit(0)
 
     prod_id = opf_path.stem
@@ -148,9 +148,10 @@ def main():
         subprocess.run(
             ["java", "-cp", str(allval_jar), "ZedVal", opf_path.name],
             cwd=str(dtb_dir),
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
-            timeout=60
+            timeout=120
         )
         temp_zedval = dtb_dir / "ZedVal.xml"
         dest_zedval = reports_dir / f"{prod_id}_ZedVal.xml"
@@ -166,33 +167,32 @@ def main():
         print(f"Error executing ZedVal: {e}")
         sys.exit(1)
 
-    # 2. Run NlsVal2 (Inactive by default)
-    ENABLE_NLSVAL2 = False
+    # 2. Run NlsVal2
+    print(f"Running NlsVal2 on {opf_path.name}...")
+    dest_nlsval = reports_dir / f"{prod_id}_NlsVal2.xml"
+    dest_nlsval_log = reports_dir / f"{prod_id}_NlsVal2.log"
     failures_nlsval = []
-    if ENABLE_NLSVAL2:
-        print(f"Running NlsVal2 on {opf_path.name}...")
-        try:
-            subprocess.run(
-                ["java", "-cp", str(allval_jar), "NlsVal2", opf_path.name],
-                cwd=str(dtb_dir),
-                capture_output=True,
-                text=True,
-                timeout=60
-            )
-            temp_nlsval = dtb_dir / "NlsVal2.xml"
-            dest_nlsval = reports_dir / f"{prod_id}_NlsVal2.xml"
-            if temp_nlsval.exists():
-                import shutil
-                shutil.move(str(temp_nlsval), str(dest_nlsval))
-            temp_nlsval_log = dtb_dir / "NlsVal2.log"
-            dest_nlsval_log = reports_dir / f"{prod_id}_NlsVal2.log"
-            if temp_nlsval_log.exists():
-                import shutil
-                shutil.move(str(temp_nlsval_log), str(dest_nlsval_log))
+    try:
+        subprocess.run(
+            [
+                "java", "-cp", str(allval_jar), "NlsVal2",
+                "-complianceReport", str(dest_nlsval),
+                "-progressReport", str(dest_nlsval_log),
+                opf_path.name
+            ],
+            cwd=str(dtb_dir),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=120
+        )
+        if dest_nlsval.exists():
             failures_nlsval = parse_xml_failures(dest_nlsval)
-        except Exception as e:
-            print(f"Error executing NlsVal2: {e}")
-            sys.exit(1)
+        else:
+            failures_nlsval = [f"NlsVal2 report XML not generated at {dest_nlsval}"]
+    except Exception as e:
+        print(f"Error executing NlsVal2: {e}")
+        failures_nlsval = [f"Error executing NlsVal2: {e}"]
 
     # Parse and combine failures
     failures_zedval = parse_xml_failures(dest_zedval)

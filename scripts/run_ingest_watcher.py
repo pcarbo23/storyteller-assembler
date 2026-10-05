@@ -10,6 +10,7 @@ import json
 import logging
 import subprocess
 import threading
+import shutil
 
 # Suppress PyTorch OpenMP warnings
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
@@ -80,12 +81,17 @@ def write_heartbeat():
 
 
 def check_docker_health() -> bool:
-    """Check if Docker service is running on host."""
+    """Check if Docker service is running on host with strict timeout."""
     try:
-        subprocess.run(["docker", "info"], capture_output=True, check=True)
-        return True
+        res = subprocess.run(["docker", "info"], capture_output=True, text=True, timeout=2)
+        return res.returncode == 0
     except Exception:
         return False
+
+
+def is_native_align_mode() -> bool:
+    """Return True if running natively on macOS with local alignment tools available."""
+    return sys.platform == "darwin" and bool(shutil.which("align") or shutil.which("npx"))
 
 
 def write_storyteller_status(status: str):
@@ -226,26 +232,33 @@ def process_book_job(pair: dict, align_runner: AlignRunner, tts_gen: TTSGenerato
     print(f"[{datetime.now().strftime('%H:%M:%S')}] [VALIDATION] Running ZedVal & NlsVal2 compliance verification...")
     write_job_status(prod_id, title, "validating", time.time() - start_time, start_time=start_time)
     
-    allval_jar = PROJECT_ROOT / "test_material" / "AllVal.jar"
-    zedval_status = "pass"
-    nlsval_status = "pass"
+    allval_jar_env = os.environ.get("NLS_VALIDATOR_JAR")
+    allval_jar = Path(allval_jar_env).expanduser().resolve() if allval_jar_env else None
+    zedval_status = "skipped"
+    nlsval_status = "skipped"
     val_version = ""
     failures_zedval = []
     failures_nlsval = []
     
-    if allval_jar.exists():
+    if allval_jar and allval_jar.exists():
         import shutil
         reports_dir = PROJECT_ROOT / "data" / "reports"
         reports_dir.mkdir(parents=True, exist_ok=True)
         opf_file = list(dtb_dir.glob("*.opf"))[0]
         
         # 1. Run ZedVal
-        subprocess.run(
-            ["java", "-cp", str(allval_jar), "ZedVal", opf_file.name],
-            cwd=str(dtb_dir),
-            capture_output=True,
-            text=True
-        )
+        try:
+            subprocess.run(
+                ["java", "-cp", str(allval_jar), "ZedVal", opf_file.name],
+                cwd=str(dtb_dir),
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                timeout=120
+            )
+        except Exception as e:
+            logger.error(f"ZedVal execution failed or timed out: {e}")
+
         temp_zedval = dtb_dir / "ZedVal.xml"
         dest_zedval = reports_dir / f"{prod_id}_ZedVal.xml"
         if temp_zedval.exists():
@@ -255,60 +268,77 @@ def process_book_job(pair: dict, align_runner: AlignRunner, tts_gen: TTSGenerato
         if temp_zedval_log.exists():
             shutil.move(str(temp_zedval_log), str(dest_zedval_log))
             
-        # 2. Run NlsVal2 (Inactive by default)
-        ENABLE_NLSVAL2 = False
-        if ENABLE_NLSVAL2:
+        # 2. Run NlsVal2
+        dest_nlsval = reports_dir / f"{prod_id}_NlsVal2.xml"
+        dest_nlsval_log = reports_dir / f"{prod_id}_NlsVal2.log"
+        try:
             subprocess.run(
-                ["java", "-cp", str(allval_jar), "NlsVal2", opf_file.name],
+                [
+                    "java", "-cp", str(allval_jar), "NlsVal2",
+                    "-complianceReport", str(dest_nlsval),
+                    "-progressReport", str(dest_nlsval_log),
+                    opf_file.name
+                ],
                 cwd=str(dtb_dir),
+                stdin=subprocess.DEVNULL,
                 capture_output=True,
-                text=True
+                text=True,
+                timeout=120
             )
-            temp_nlsval = dtb_dir / "NlsVal2.xml"
-            dest_nlsval = reports_dir / f"{prod_id}_NlsVal2.xml"
-            if temp_nlsval.exists():
-                shutil.move(str(temp_nlsval), str(dest_nlsval))
-            temp_nlsval_log = dtb_dir / "NlsVal2.log"
-            dest_nlsval_log = reports_dir / f"{prod_id}_NlsVal2.log"
-            if temp_nlsval_log.exists():
-                shutil.move(str(temp_nlsval_log), str(dest_nlsval_log))
-                
-            # Parse XMLs
-            from scripts.test_post_storyteller import parse_xml_failures, extract_validator_version
-            failures_nlsval = parse_xml_failures(dest_nlsval)
-            if failures_nlsval:
-                nlsval_status = "fail"
-        else:
-            nlsval_status = "pending"
+        except Exception as e:
+            logger.error(f"NlsVal2 execution failed or timed out: {e}")
             
         # Parse XMLs
         from scripts.test_post_storyteller import parse_xml_failures, extract_validator_version
-        failures_zedval = parse_xml_failures(dest_zedval)
-        val_version = extract_validator_version(dest_zedval)
-        
-        if failures_zedval:
+        if dest_nlsval.exists():
+            failures_nlsval = parse_xml_failures(dest_nlsval)
+            nlsval_status = "fail" if failures_nlsval else "pass"
+            if not val_version:
+                val_version = extract_validator_version(dest_nlsval)
+        else:
+            nlsval_status = "fail"
+            logger.error(f"NlsVal2 report XML was not generated for {prod_id}")
+            
+        if dest_zedval.exists():
+            failures_zedval = parse_xml_failures(dest_zedval)
+            if not val_version:
+                val_version = extract_validator_version(dest_zedval)
+            zedval_status = "fail" if failures_zedval else "pass"
+        else:
             zedval_status = "fail"
+            logger.error(f"ZedVal report XML was not generated for {prod_id}")
+    else:
+        warn_msg = f"NLS_VALIDATOR_JAR environment variable not set or file not found ({allval_jar}). Skipping compliance verification."
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] [WARNING] {warn_msg}")
+        logger.warning(warn_msg)
+        zedval_status = "skipped"
+        nlsval_status = "skipped"
             
-        if failures_zedval or failures_nlsval:
-            err_msg = f"Compliance checks failed. ZedVal: {failures_zedval}. NlsVal2: {failures_nlsval}"
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] [ERROR] {err_msg}")
-            
-            # Log failure to tracking database
-            tracker.log_production(
-                prod_id=prod_id,
-                opf_path=opf_file,
-                isbn_epub=pair.get("isbn_epub", "Unknown"),
-                isbn_audio=pair.get("isbn_audio", "Unknown"),
-                zedval_status=zedval_status,
-                nlsval_status=nlsval_status,
-                validator_version=val_version
-            )
-            
-            write_job_status(prod_id, title, "failed_validation", time.time() - start_time, error=err_msg, start_time=start_time)
-            send_macos_notification("Validation Failed", f"Compliance checks failed for '{title}'")
-            reset_pipeline_environment()
-            print(f"\n[{datetime.now().strftime('%H:%M:%S')}] [WATCHER] Ready and waiting for next book...")
-            return
+    if failures_zedval or failures_nlsval:
+        err_msg = f"Compliance checks failed. ZedVal: {failures_zedval}. NlsVal2: {failures_nlsval}"
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] [ERROR] {err_msg}")
+        
+        # Log failure to tracking database
+        try:
+            fail_opf_file = list(dtb_dir.glob("*.opf"))[0]
+        except Exception:
+            fail_opf_file = None
+
+        tracker.log_production(
+            prod_id=prod_id,
+            opf_path=fail_opf_file,
+            isbn_epub=pair.get("isbn_epub", "Unknown"),
+            isbn_audio=pair.get("isbn_audio", "Unknown"),
+            zedval_status=zedval_status,
+            nlsval_status=nlsval_status,
+            validator_version=val_version
+        )
+        
+        write_job_status(prod_id, title, "failed_validation", time.time() - start_time, error=err_msg, start_time=start_time)
+        send_macos_notification("Validation Failed", f"Compliance checks failed for '{title}'")
+        reset_pipeline_environment()
+        print(f"\n[{datetime.now().strftime('%H:%M:%S')}] [WATCHER] Ready and waiting for next book...")
+        return
 
     total_time = time.time() - start_time
     print(f"[{datetime.now().strftime('%H:%M:%S')}] [SUCCESS] Finished processing: '{title}' in {int(total_time)}s! Deliverable: {dtb_dir.name}")
@@ -360,7 +390,9 @@ def heartbeat_thread_target():
     while True:
         write_heartbeat()
         docker_ok = check_docker_health()
-        write_storyteller_status("online" if docker_ok else "offline")
+        native_ok = is_native_align_mode()
+        # If native alignment on Apple Silicon is active or Docker is running, status is online
+        write_storyteller_status("online" if (docker_ok or native_ok) else "offline")
         time.sleep(5)
 
 
@@ -390,23 +422,25 @@ def main():
     
     # Watch and process incoming books
     for pair in watcher.start_polling():
-        # Check Docker service health before processing
-        is_online = check_docker_health()
+        # Check alignment engine readiness (Docker or Native macOS)
+        native_mode = is_native_align_mode()
+        docker_online = check_docker_health()
+        is_ready = docker_online or native_mode
         
-        if not is_online:
+        if not is_ready:
             if was_online is not False:
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] [WARNING] Docker daemon is offline.")
-                print(f"Ingestion is paused. Please start Docker.")
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] [WARNING] Alignment engine unavailable (Docker is offline and no native align CLI found).")
+                print(f"Ingestion is paused. Please start Docker or install native align CLI.")
                 write_storyteller_status("offline")
-                send_macos_notification("Docker Offline", "Docker daemon is offline. Ingestion paused.")
+                send_macos_notification("Alignment Offline", "Alignment engine unavailable. Ingestion paused.")
                 was_online = False
             time.sleep(10)
             continue
         
         if was_online is False:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] [INFO] Docker service is online. Resuming ingestion.")
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] [INFO] Alignment engine is ready. Resuming ingestion.")
             write_storyteller_status("online")
-            send_macos_notification("Docker Online", "Docker daemon is online. Resuming ingestion.")
+            send_macos_notification("Alignment Ready", "Alignment engine is online. Resuming ingestion.")
             was_online = True
             
         process_book_job(pair, align_runner, tts_gen, id_manager, tracker)

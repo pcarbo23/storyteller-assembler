@@ -172,4 +172,68 @@ def test_boundary_inverted_clips_sanitization(tmp_path):
     assert par_map["ch10.xhtml"]["clip_end"] == "0:00:07.400"
 
 
+def test_heading_helpers():
+    from src.dtb_converter import clean_title_case, build_composite_heading, should_update_title
+
+    # clean_title_case
+    assert clean_title_case("GET FIT WITH SANTA!") == "Get Fit With Santa!"
+    assert clean_title_case("Get Fit with Santa!") == "Get Fit with Santa!"
+
+    # build_composite_heading
+    assert build_composite_heading(["Chapter 1", "GET FIT WITH SANTA!"]) == "Chapter 1: Get Fit With Santa!"
+    assert build_composite_heading(["Chapter 13", "BLANK"]) == "Chapter 13: Blank"
+    assert build_composite_heading(["Chapter 5", "Chapter 5: Prank Day"]) == "Chapter 5: Prank Day"
+    assert build_composite_heading(["Prologue"]) == "Prologue"
+
+    # should_update_title
+    assert should_update_title("Get Fit with Santa!", ["Chapter 1", "GET FIT WITH SANTA!"]) is True
+    assert should_update_title("Chapter 1: Get Fit With Santa!", ["Chapter 1", "GET FIT WITH SANTA!"]) is False
+    assert should_update_title("Chapter 1", ["Chapter 1", "GET FIT WITH SANTA!"]) is True
+    assert should_update_title("Acknowledgements", ["Acknowledgements"]) is False
+
+
+def test_composite_chapter_heading_resolution(tmp_path):
+    from src.dtb_converter import DTBConverter
+
+    converter = DTBConverter(prod_id="db100083", work_dir=tmp_path)
+
+    chapter_headings = {
+        "text/Chapter1.xhtml": {
+            "composite_title": "Chapter 1: Get Fit With Santa!",
+            "heading_texts": ["Chapter 1", "GET FIT WITH SANTA!"],
+            "span_ids": ["c1-s0", "c1-s1"],
+            "target_ids": ["ch1", "c1-s0", "c1-s1"],
+            "href": "text/Chapter1.xhtml",
+            "filename": "Chapter1.xhtml"
+        }
+    }
+
+    smil_segments = [
+        {"par_id": "p-1", "text_src": "../text/Chapter1.xhtml#c1-s0", "audio_zip_path": "audio1.wav", "clip_begin": 45.44, "clip_end": 50.69},
+        {"par_id": "p-2", "text_src": "../text/Chapter1.xhtml#c1-s1", "audio_zip_path": "audio1.wav", "clip_begin": 50.69, "clip_end": 54.65},
+        {"par_id": "p-3", "text_src": "../text/Chapter1.xhtml#c1-s2", "audio_zip_path": "audio1.wav", "clip_begin": 54.65, "clip_end": 60.00}
+    ]
+
+    audio_map = {"audio1.wav": "db100083-0002.wav"}
+    par_map = converter.build_par_by_text_src(
+        smil_segments=smil_segments,
+        converted_audio_map=audio_map,
+        chapter_headings=chapter_headings
+    )
+
+    # Lookup by target id #ch1 (from publisher TOC)
+    node = {"id": "nav-1", "title": "Get Fit with Santa!", "src": "text/Chapter1.xhtml#ch1"}
+    resolved = converter.resolve_node_audio(node, par_map)
+
+    assert resolved is not None
+    audio_src, clip_b, clip_e, par_id = resolved
+    assert audio_src == "db100083-0002.wav"
+    assert clip_b == "0:00:45.440"
+    assert clip_e == "0:00:54.650"
+    assert par_id == "par-body-1"
+    # Title must be updated to the composite title
+    assert node["title"] == "Chapter 1: Get Fit With Santa!"
+
+
+
 

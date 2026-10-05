@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 import sys
 import hashlib
@@ -8,10 +9,51 @@ import zipfile
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 from xml.etree import ElementTree as ET
+from bs4 import BeautifulSoup, Tag
 import mutagen
 from src import __version__
 
 logger = logging.getLogger(__name__)
+
+
+def clean_title_case(text: str) -> str:
+    """If all uppercase, converts to Title Case; otherwise preserves original capitalization."""
+    if text.isupper():
+        return text.title()
+    return text
+
+
+def build_composite_heading(texts: List[str]) -> str:
+    """Combines chapter number/label and chapter title/subtitle cleanly."""
+    if not texts:
+        return ""
+    if len(texts) == 1:
+        return clean_title_case(texts[0].strip())
+
+    res = clean_title_case(texts[0].strip().rstrip(".:- "))
+    for t in texts[1:]:
+        t_str = t.strip()
+        if not t_str:
+            continue
+        if t_str.lower().startswith(res.lower()):
+            res = clean_title_case(t_str)
+        else:
+            cleaned = clean_title_case(t_str.lstrip(".:- "))
+            if cleaned.lower() not in res.lower():
+                res = f"{res}: {cleaned}"
+    return res
+
+
+def should_update_title(existing_title: str, heading_texts: List[str]) -> bool:
+    """Returns True if existing_title is missing a major component of heading_texts."""
+    if not existing_title or not heading_texts:
+        return False
+    ext_lower = existing_title.lower()
+    for ht in heading_texts:
+        clean_ht = ht.strip().lower().rstrip(".:- ")
+        if len(clean_ht) > 1 and clean_ht not in ext_lower:
+            return True
+    return False
 
 
 def calculate_file_md5(filepath: Path) -> str:
@@ -145,17 +187,24 @@ def get_audio_duration_seconds(audio_path: Path) -> Optional[float]:
 
 
 class EPUBOverlayExtractor:
-    """Extracts metadata, multi-level NCX/NAV navigation, and SMIL overlay synchronization from an EPUB3 file."""
+    """Extracts metadata, multi-level NCX/NAV navigation, and SMIL overlay synchronization from an EPUB3 file or directory."""
 
     def __init__(self, epub_path: Path):
         self.epub_path = Path(epub_path)
 
     def extract(self) -> Dict[str, Any]:
-        with zipfile.ZipFile(self.epub_path, "r") as z:
-            container_xml = ET.fromstring(z.read("META-INF/container.xml"))
+        is_dir = self.epub_path.is_dir()
+        if is_dir:
+            read_fn = lambda p: (self.epub_path / p).read_bytes()
+        else:
+            z = zipfile.ZipFile(self.epub_path, "r")
+            read_fn = lambda p: z.read(p)
+
+        try:
+            container_xml = ET.fromstring(read_fn("META-INF/container.xml"))
             opf_path = container_xml.find(".//{*}rootfile").attrib["full-path"]
             opf_dir = Path(opf_path).parent
-            opf_xml = ET.fromstring(z.read(opf_path))
+            opf_xml = ET.fromstring(read_fn(opf_path))
 
             def resolve_zip_path(rel_path: str) -> str:
                 if str(opf_dir) == ".":
@@ -186,17 +235,20 @@ class EPUBOverlayExtractor:
             nav_tree = []
             if ncx_href:
                 try:
-                    ncx_data = z.read(resolve_zip_path(ncx_href))
+                    ncx_data = read_fn(resolve_zip_path(ncx_href))
                     nav_tree = self._parse_ncx(ncx_data)
                 except Exception as e:
                     logger.warning(f"Error parsing NCX from {ncx_href}: {e}")
 
             if not nav_tree and nav_href:
                 try:
-                    nav_data = z.read(resolve_zip_path(nav_href))
+                    nav_data = read_fn(resolve_zip_path(nav_href))
                     nav_tree = self._parse_nav_xhtml(nav_data)
                 except Exception as e:
                     logger.warning(f"Error parsing NAV XHTML from {nav_href}: {e}")
+
+            # Extract chapter headings from XHTML documents
+            chapter_headings = self._extract_chapter_headings(read_fn, manifest, resolve_zip_path)
 
             # Extract SMIL sequence and audio file references from spine
             spine_itemrefs = opf_xml.findall(".//{*}spine/{*}itemref")
@@ -219,7 +271,7 @@ class EPUBOverlayExtractor:
                 smil_href = smil_item["href"]
                 smil_zip_path = resolve_zip_path(smil_href)
                 try:
-                    smil_data = z.read(smil_zip_path)
+                    smil_data = read_fn(smil_zip_path)
                     smil_xml = ET.fromstring(smil_data)
                     smil_dir = Path(smil_zip_path).parent
 
@@ -272,8 +324,91 @@ class EPUBOverlayExtractor:
                 "nav_tree": nav_tree,
                 "smil_segments": smil_segments,
                 "audio_order": audio_order,
-                "epub_path": self.epub_path
+                "epub_path": self.epub_path,
+                "chapter_headings": chapter_headings
             }
+        finally:
+            if not is_dir:
+                z.close()
+
+    def _extract_chapter_headings(
+        self,
+        read_file_fn: Any,
+        manifest: Dict[str, Dict[str, str]],
+        resolve_zip_path_fn: Any
+    ) -> Dict[str, Dict[str, Any]]:
+        headings_map = {}
+        for item_id, item_attrs in manifest.items():
+            media_type = item_attrs.get("media-type", "")
+            href = item_attrs.get("href", "")
+            if media_type in ("application/xhtml+xml", "text/html") or href.endswith((".xhtml", ".html")):
+                if any(x in href.lower() for x in ["nav", "toc", "cover", "title", "copy"]):
+                    continue
+                zip_path = resolve_zip_path_fn(href)
+                try:
+                    raw_data = read_file_fn(zip_path)
+                    soup = BeautifulSoup(raw_data, "html.parser")
+                    body = soup.find("body")
+                    if not body:
+                        continue
+
+                    h_tags = body.find_all(re.compile(r"^h[1-6]$"))
+                    if not h_tags:
+                        continue
+
+                    first_h = h_tags[0]
+                    cand_headings = [first_h]
+                    curr = first_h.next_sibling
+                    while curr:
+                        if isinstance(curr, Tag):
+                            if curr.name in ["h1", "h2", "h3", "h4", "h5", "h6"]:
+                                cand_headings.append(curr)
+                            elif any(k in " ".join(curr.get("class", [])).lower() for k in ["subtitle", "subhead", "chaptitle", "chap_head"]):
+                                cand_headings.append(curr)
+                            elif curr.name in ["p", "div", "section"]:
+                                if len(curr.get_text(strip=True)) > 0:
+                                    break
+                        curr = curr.next_sibling
+
+                    span_ids = []
+                    target_ids = []
+                    texts = []
+                    for h in cand_headings:
+                        if h.get("id"):
+                            target_ids.append(h["id"])
+                        for s in h.find_all(attrs={"epub:type": "storyteller:sentence-span"}):
+                            if s.get("id"):
+                                span_ids.append(s["id"])
+                                target_ids.append(s["id"])
+                        if not span_ids:
+                            for s in h.find_all("span"):
+                                if s.get("id"):
+                                    span_ids.append(s["id"])
+                                    target_ids.append(s["id"])
+                        txt = h.get_text(" ", strip=True)
+                        if txt:
+                            texts.append(txt)
+
+                    if texts:
+                        norm_href = str(Path(href).as_posix())
+                        base_name = Path(norm_href).name
+                        composite_title = build_composite_heading(texts)
+                        heading_info = {
+                            "composite_title": composite_title,
+                            "heading_texts": texts,
+                            "span_ids": span_ids,
+                            "target_ids": target_ids,
+                            "href": norm_href,
+                            "filename": base_name
+                        }
+                        headings_map[norm_href] = heading_info
+                        headings_map[base_name] = heading_info
+                        for tid in target_ids:
+                            headings_map[f"{norm_href}#{tid}"] = heading_info
+                            headings_map[f"{base_name}#{tid}"] = heading_info
+                except Exception as e:
+                    logger.debug(f"Could not extract headings from {href}: {e}")
+        return headings_map
 
     def _extract_metadata(self, opf_xml: ET.Element) -> Dict[str, Any]:
         meta_dict = {}
@@ -487,8 +622,9 @@ class DTBConverter:
         # Try ffmpeg command line (forces PCM 16-bit 44100Hz mono/stereo WAV)
         converted = False
         try:
-            cmd = ["ffmpeg", "-y", "-i", str(input_path), "-ar", "44100", "-acodec", "pcm_s16le", str(temp_wav)]
-            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            # Use -nostdin and stdin=DEVNULL to prevent SIGTTOU / SIGTTIN suspensions when running under background daemons
+            cmd = ["ffmpeg", "-nostdin", "-y", "-i", str(input_path), "-ar", "44100", "-acodec", "pcm_s16le", str(temp_wav)]
+            res = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
             if res.returncode == 0:
                 logger.debug(f"Decoded {input_path.name} -> {temp_wav.name} via ffmpeg CLI")
                 converted = True
@@ -526,7 +662,8 @@ class DTBConverter:
         self,
         smil_segments: List[Dict[str, Any]],
         converted_audio_map: Dict[str, str],
-        default_wav_name: str = ""
+        default_wav_name: str = "",
+        chapter_headings: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Dict[str, Any]]:
         """Builds lookup mapping from HTML text sources to SMIL audio clip details."""
         audio_durations = {}
@@ -557,20 +694,93 @@ class DTBConverter:
                 "par_key_id": par_key_id,
                 "audio_src": wav_name,
                 "clip_begin": clip_b,
-                "clip_end": clip_e
+                "clip_end": clip_e,
+                "clip_begin_sec": clip_b_sec,
+                "clip_end_sec": clip_e_sec
             }
 
             text_src = seg.get("text_src", "")
             if text_src:
                 norm_text_src = str(Path(text_src).as_posix())
-                if norm_text_src not in par_by_text_src:
-                    par_by_text_src[norm_text_src] = info
                 base_text_src = norm_text_src.split("#")[0]
-                if base_text_src not in par_by_text_src:
-                    par_by_text_src[base_text_src] = info
+                frag = f"#{norm_text_src.split('#')[1]}" if "#" in norm_text_src else ""
                 filename_only = Path(base_text_src).name
-                if filename_only not in par_by_text_src:
-                    par_by_text_src[filename_only] = info
+
+                # Register path variations
+                for k in [norm_text_src, f"{filename_only}{frag}", f"text/{filename_only}{frag}"]:
+                    if k not in par_by_text_src:
+                        par_by_text_src[k] = info
+
+                for base_k in [base_text_src, filename_only, f"text/{filename_only}"]:
+                    if base_k not in par_by_text_src:
+                        par_by_text_src[base_k] = info
+
+        # If chapter headings are provided, merge multi-span headings into composite entries
+        if chapter_headings:
+            seen_hrefs = set()
+            for key, heading_info in chapter_headings.items():
+                norm_href = heading_info.get("href", "")
+                if not norm_href or norm_href in seen_hrefs:
+                    continue
+                seen_hrefs.add(norm_href)
+
+                span_ids = heading_info.get("span_ids", [])
+                if not span_ids:
+                    continue
+
+                filename = heading_info.get("filename", "")
+                target_ids = heading_info.get("target_ids", [])
+                composite_title = heading_info.get("composite_title", "")
+                heading_texts = heading_info.get("heading_texts", [])
+
+                matched_segs = []
+                for s_id in span_ids:
+                    seg_info = None
+                    for seg_key in [f"{norm_href}#{s_id}", f"{filename}#{s_id}", f"text/{filename}#{s_id}", f"../text/{filename}#{s_id}"]:
+                        if seg_key in par_by_text_src:
+                            seg_info = par_by_text_src[seg_key]
+                            break
+                    if not seg_info:
+                        for k, v in par_by_text_src.items():
+                            if "#" in k and k.split("#")[1] == s_id:
+                                k_file = Path(k.split("#")[0]).name
+                                if not filename or k_file == filename:
+                                    seg_info = v
+                                    break
+                    if seg_info and seg_info not in matched_segs:
+                        matched_segs.append(seg_info)
+
+                if matched_segs:
+                    first_seg = matched_segs[0]
+                    wav_name = first_seg["audio_src"]
+                    same_audio_segs = [s for s in matched_segs if s["audio_src"] == wav_name]
+
+                    comp_b_sec = min(s["clip_begin_sec"] for s in same_audio_segs)
+                    comp_e_sec = max(s["clip_end_sec"] for s in same_audio_segs)
+
+                    composite_info = {
+                        "par_key_id": first_seg["par_key_id"],
+                        "audio_src": wav_name,
+                        "clip_begin": format_time(comp_b_sec),
+                        "clip_end": format_time(comp_e_sec),
+                        "clip_begin_sec": comp_b_sec,
+                        "clip_end_sec": comp_e_sec,
+                        "composite_title": composite_title,
+                        "heading_texts": heading_texts
+                    }
+
+                    keys_to_map = [norm_href, filename, f"text/{filename}", f"../text/{filename}"]
+                    for tid in target_ids:
+                        keys_to_map.extend([
+                            f"{norm_href}#{tid}",
+                            f"{filename}#{tid}",
+                            f"text/{filename}#{tid}",
+                            f"../text/{filename}#{tid}"
+                        ])
+
+                    for k in keys_to_map:
+                        par_by_text_src[k] = composite_info
+
         return par_by_text_src
 
     @staticmethod
@@ -582,8 +792,15 @@ class DTBConverter:
             norm_src = str(Path(src).as_posix())
             base_src = norm_src.split("#")[0]
             src_filename = Path(base_src).name
+            frag = f"#{norm_src.split('#')[1]}" if "#" in norm_src else ""
 
-            match = par_by_text_src.get(norm_src) or par_by_text_src.get(base_src) or par_by_text_src.get(src_filename)
+            match = (
+                par_by_text_src.get(norm_src)
+                or par_by_text_src.get(f"{src_filename}{frag}")
+                or par_by_text_src.get(f"text/{src_filename}{frag}")
+                or par_by_text_src.get(base_src)
+                or par_by_text_src.get(src_filename)
+            )
 
             if not match:
                 for text_key, info in par_by_text_src.items():
@@ -595,6 +812,11 @@ class DTBConverter:
                                 break
 
         if match:
+            comp_title = match.get("composite_title")
+            heading_texts = match.get("heading_texts", [])
+            current_title = node.get("title", "")
+            if comp_title and should_update_title(current_title, heading_texts):
+                node["title"] = comp_title
             return match["audio_src"], match["clip_begin"], match["clip_end"], match["par_key_id"]
         return None
 
@@ -602,10 +824,11 @@ class DTBConverter:
         self,
         nav_tree: List[Dict[str, Any]],
         smil_segments: List[Dict[str, Any]],
-        converted_audio_map: Optional[Dict[str, str]] = None
+        converted_audio_map: Optional[Dict[str, str]] = None,
+        chapter_headings: Optional[Dict[str, Any]] = None
     ) -> List[Dict[str, Any]]:
         """Prunes navigation tree to retain only nodes that resolve to narrated audio (or have valid children)."""
-        par_by_text_src = self.build_par_by_text_src(smil_segments, converted_audio_map or {})
+        par_by_text_src = self.build_par_by_text_src(smil_segments, converted_audio_map or {}, chapter_headings=chapter_headings)
 
         def prune_nodes(nodes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             pruned = []
@@ -738,7 +961,8 @@ class DTBConverter:
             closing_timing=closing_timing,
             par_to_smil_map=par_to_smil_map,
             max_depth=metadata_nls.get("navigation_levels", 1),
-            output_ncx=ncx_path
+            output_ncx=ncx_path,
+            chapter_headings=epub_data.get("chapter_headings")
         )
 
         # 5. Generate Z39 OPF file
@@ -940,7 +1164,8 @@ class DTBConverter:
         closing_timing: Dict[str, Any],
         par_to_smil_map: Dict[str, Tuple[str, str]],
         max_depth: int,
-        output_ncx: Path
+        output_ncx: Path,
+        chapter_headings: Optional[Dict[str, Any]] = None
     ) -> Path:
         # Calculate opening title and author clip times
         t1_start = opening_timing.get("opening_01_title", {}).get("start", 0.0)
@@ -962,7 +1187,12 @@ class DTBConverter:
         close_clip_end = format_time(closing_timing.get("closing_01_end_of_title", {}).get("end", 5.0))
 
         # Build mapping from EPUB HTML targets to SMIL audio clip details
-        par_by_text_src = self.build_par_by_text_src(smil_segments, converted_audio_map, opening_wav_name)
+        par_by_text_src = self.build_par_by_text_src(
+            smil_segments=smil_segments,
+            converted_audio_map=converted_audio_map,
+            default_wav_name=opening_wav_name,
+            chapter_headings=chapter_headings
+        )
 
         first_smil_file, first_par_id = par_to_smil_map.get("par-titauth", (f"{self.prod_id_full}-0001.smil", "par-titauth"))
         last_smil_file, last_par_id = par_to_smil_map.get("par-close", (f"{self.prod_id_full}-0001.smil", "par-close"))

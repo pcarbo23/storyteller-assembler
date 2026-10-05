@@ -125,7 +125,7 @@ flowchart TD
 - **Audio & TTS Libraries**:
   - `ffmpeg`: Required for audio transcoding and slicing.
   - `espeak-ng`: Required system library for phonetic transcription in Coqui TTS.
-- **NLS Validator Suite**: `AllVal.jar` (optional for local compliance verification).
+- **NLS Validator Suite (`AllVal.jar`)**: Optional. The proprietary NLS validator JAR (`AllVal.jar`) is **not included** in the git clone. The software expects its location to be configured via the `NLS_VALIDATOR_JAR` environment variable (e.g. `export NLS_VALIDATOR_JAR="/path/to/AllVal.jar"`). If unset or not found, the compliance verification stage is safely skipped without failing the pipeline.
 
 ---
 
@@ -165,6 +165,14 @@ Copy the sample environment file:
 cp .env.example .env
 ```
 *(Default settings use local disk storage in `./data/` and standard Coqui VITS voice models).*
+
+#### NLS Validator Configuration (`AllVal.jar`):
+`AllVal.jar` is proprietary and is **not included in the Git clone**. To enable automated compliance verification (`ZedVal` & `NlsVal2`), set the `NLS_VALIDATOR_JAR` environment variable in your shell profile (`~/.zshrc` or `~/.bashrc`):
+```bash
+export NLS_VALIDATOR_JAR="/path/to/AllVal.jar"
+```
+> [!NOTE]
+> If `NLS_VALIDATOR_JAR` is unset or points to a non-existent file, the assembler will gracefully skip the compliance check stage and mark the run status as `"skipped"` in `data/production_history.db` without interrupting or failing the build.
 
 ---
 
@@ -309,7 +317,7 @@ python scripts/test_post_storyteller.py \
 #### Workflow Executed by the Script:
 1. **Virtual Environment Guard**: Verifies that execution is running under the local project `.venv` interpreter.
 2. **DTB Package Compilation**: Invokes `process_aligned_epub` to extract SMIL overlays, synthesize NLS opening and closing audio credits, transcode multi-track audio into master 44.1kHz WAV files, generate sequential SMIL 1.0 sync maps, create hierarchical NCX navigation points, and write the OPF package manifest.
-3. **Automated Compliance Validation**: Executes `ZedVal` (and `NlsVal2` if enabled) from `test_material/AllVal.jar` against the generated OPF package document.
+3. **Automated Compliance Validation**: Executes `ZedVal` (and `NlsVal2` if enabled) using the binary resolved from the `NLS_VALIDATOR_JAR` environment variable against the generated OPF package document. If `NLS_VALIDATOR_JAR` is not configured, validation is safely skipped.
 4. **Report Archiving**: Relocates `ZedVal.xml`, `ZedVal.log`, `NlsVal2.xml`, and `NlsVal2.log` into `data/reports/<prod_id>_*.xml` for inspection.
 5. **Failure Analysis**: Parses all `<error>` and `<failure>` nodes, displaying line numbers and test IDs in the terminal. Returns exit code `0` on total compliance, or exit code `1` if any validation failures are detected.
 
@@ -379,7 +387,7 @@ sequenceDiagram
   - Strict reordering of `<manifest>` SMIL entries and `media:duration` `<meta>` elements to exactly match the reading order defined in the `<spine>` (`epub_MED_015` compliance).
 
 ### Stage 6: Automated Java Compliance Verification
-The pipeline executes `AllVal.jar` (`ZedVal` and `NlsVal2`) against the output package, capturing detailed error logs and XML test results in `data/reports/`.
+The pipeline executes `AllVal.jar` (`ZedVal` and `NlsVal2`) against the output package if `NLS_VALIDATOR_JAR` is configured in the environment, capturing detailed error logs and XML test results in `data/reports/`. If `NLS_VALIDATOR_JAR` is unset or points to a missing file, this verification step is safely skipped and recorded as `"skipped"` in the audit database.
 
 ### Stage 7: Audit Tracking & Telemetry
 `src/tracker.py` commits the full run metadata, validator versions, and compliance status to SQLite and CSV.
@@ -415,10 +423,14 @@ The pipeline is designed with a **zero-state architecture**:
 
 **Resolution**: Ensure Docker Desktop (or the Docker daemon on Linux) is started and running before launching the watcher or dashboard.
 
-### 2. Missing Java JRE / ZedVal Validation Skipped
-> **Log**: `Java executable could not be found via JAVA_HOME or system PATH. Skipping ZedVal.`
+### 2. Missing AllVal.jar / Compliance Validation Skipped
+> **Log**: `NLS_VALIDATOR_JAR environment variable not set or file not found. Skipping compliance verification.`
 
-**Resolution**: Install a Java Runtime Environment (JRE 8+) and verify that typing `java -version` in your terminal outputs a valid version string.
+**Resolution**: `AllVal.jar` is proprietary to NLS and is **not included in the Git repository**. If `NLS_VALIDATOR_JAR` is not set in the environment or points to a non-existent file, the assembler logs a warning and marks validation as `"skipped"` rather than failing the build. To enable automated validation, export the path to your local copy in your shell profile (`~/.zshrc` or `~/.bashrc`):
+```bash
+export NLS_VALIDATOR_JAR="/path/to/AllVal.jar"
+```
+Also ensure a Java Runtime Environment (JRE 8+) is installed and accessible via `java -version`.
 
 ### 3. Coqui TTS / PyTorch Audio Dependency Errors
 > **Error**: `RuntimeError: espeak not installed on system.`

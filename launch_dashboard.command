@@ -3,6 +3,11 @@
 # Export system paths for GUI launcher environment
 export PATH="/usr/local/bin:/opt/homebrew/bin:$PATH"
 
+# Default NLS_VALIDATOR_JAR if present in standard validators directory
+if [ -z "$NLS_VALIDATOR_JAR" ] && [ -f "$HOME/validators/AllVal.jar" ]; then
+    export NLS_VALIDATOR_JAR="$HOME/validators/AllVal.jar"
+fi
+
 # Get the directory of this script
 DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$DIR"

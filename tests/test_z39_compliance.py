@@ -57,11 +57,12 @@ def test_zedval_compliance_aligned_epubs(tmp_path, epub_filename, prod_id):
     opf_file = opf_files[0]
     
     # Run ZedVal
-    allval_jar = project_root / "test_material" / "AllVal.jar"
-    if not allval_jar.exists():
-        pytest.skip("AllVal.jar not found")
+    allval_jar_env = os.environ.get("NLS_VALIDATOR_JAR")
+    allval_jar = Path(allval_jar_env).expanduser().resolve() if allval_jar_env else None
+    if not allval_jar or not allval_jar.exists():
+        pytest.skip(f"NLS_VALIDATOR_JAR environment variable not set or file not found ({allval_jar})")
         
-    result = subprocess.run(
+    result_zedval = subprocess.run(
         ["java", "-cp", str(allval_jar), "ZedVal", opf_file.name],
         cwd=str(dtb_dir),
         capture_output=True,
@@ -69,9 +70,23 @@ def test_zedval_compliance_aligned_epubs(tmp_path, epub_filename, prod_id):
     )
     
     from scripts.test_post_storyteller import parse_xml_failures
-    xml_file = dtb_dir / "ZedVal.xml"
-    assert xml_file.exists(), "ZedVal.xml was not generated"
+    xml_zedval = dtb_dir / "ZedVal.xml"
+    assert xml_zedval.exists(), "ZedVal.xml was not generated"
     
-    failures = parse_xml_failures(xml_file)
-    if failures:
-        pytest.fail(f"ZedVal reported compliance failures for {title}:\n" + "\n".join(failures))
+    failures_zedval = parse_xml_failures(xml_zedval)
+    if failures_zedval:
+        pytest.fail(f"ZedVal reported compliance failures for {title}:\n" + "\n".join(failures_zedval))
+
+    # Run NlsVal2
+    result_nlsval = subprocess.run(
+        ["java", "-cp", str(allval_jar), "NlsVal2", opf_file.name],
+        cwd=str(dtb_dir),
+        capture_output=True,
+        text=True
+    )
+    xml_nlsval = dtb_dir / "NlsVal2.xml"
+    assert xml_nlsval.exists(), "NlsVal2.xml was not generated"
+    
+    failures_nlsval = parse_xml_failures(xml_nlsval)
+    if failures_nlsval:
+        pytest.fail(f"NlsVal2 reported compliance failures for {title}:\n" + "\n".join(failures_nlsval))

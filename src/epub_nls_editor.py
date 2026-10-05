@@ -90,6 +90,11 @@ class NLSEPUBEditor:
                 prod_id=norm_prod_id
             )
 
+            # 3c. Synchronize chapter titles in navigation documents (NCX and NAV XHTML)
+            self._synchronize_navigation(
+                temp_dir=temp_dir
+            )
+
             # 4. Repackage into target EPUB container
             if output_epub.exists():
                 output_epub.unlink()
@@ -302,6 +307,109 @@ class NLSEPUBEditor:
                 logger.info(f"Updated NCX dtb:uid to '{nls_uid_val}' in {ncx_file.name}")
             except Exception as e:
                 logger.warning(f"Could not transform NCX file {ncx_file}: {e}")
+
+    def _synchronize_navigation(self, temp_dir: Path) -> None:
+        """
+        Synchronizes EPUB navigation documents (NCX and NAV XHTML) to include
+        composite chapter titles (e.g. 'Chapter 1: Get Fit With Santa!').
+        """
+        try:
+            from src.dtb_converter import EPUBOverlayExtractor, should_update_title
+
+            extractor = EPUBOverlayExtractor(temp_dir)
+            epub_data = extractor.extract()
+            chapter_headings = epub_data.get("chapter_headings", {})
+            if not chapter_headings:
+                return
+
+            # 1. Update NCX navigation documents
+            for ncx_file in temp_dir.glob("**/*.ncx"):
+                try:
+                    ncx_text = ncx_file.read_text(encoding="utf-8", errors="replace")
+                    soup = BeautifulSoup(ncx_text, "xml")
+                    changed = False
+                    for np in soup.find_all("navPoint"):
+                        content = np.find("content")
+                        if not content or not content.get("src"):
+                            continue
+                        c_src = content["src"]
+                        norm_c_src = str(Path(c_src).as_posix())
+                        base_c_src = norm_c_src.split("#")[0]
+                        filename = Path(base_c_src).name
+
+                        h_info = (
+                            chapter_headings.get(norm_c_src)
+                            or chapter_headings.get(c_src)
+                            or chapter_headings.get(filename)
+                            or chapter_headings.get(base_c_src)
+                        )
+                        if not h_info and "#" in norm_c_src:
+                            target_id = norm_c_src.split("#")[1]
+                            h_info = chapter_headings.get(f"{filename}#{target_id}") or chapter_headings.get(f"text/{filename}#{target_id}")
+
+                        if h_info:
+                            comp_title = h_info.get("composite_title")
+                            heading_texts = h_info.get("heading_texts", [])
+                            text_tag = np.find("navLabel")
+                            text_el = text_tag.find("text") if text_tag else np.find("text")
+
+                            if text_el and comp_title:
+                                curr_text = text_el.get_text(strip=True)
+                                if should_update_title(curr_text, heading_texts):
+                                    text_el.string = comp_title
+                                    changed = True
+
+                    if changed:
+                        ncx_file.write_text(str(soup), encoding="utf-8")
+                        logger.info(f"Synchronized chapter titles in NCX: {ncx_file.name}")
+                except Exception as e:
+                    logger.warning(f"Could not synchronize NCX {ncx_file}: {e}")
+
+            # 2. Update NAV XHTML documents
+            for nav_file in temp_dir.glob("**/*.xhtml"):
+                try:
+                    nav_text = nav_file.read_text(encoding="utf-8", errors="replace")
+                    if 'epub:type="toc"' not in nav_text and 'id="toc"' not in nav_text:
+                        continue
+                    soup = BeautifulSoup(nav_text, "xml")
+                    toc_nav = soup.find(attrs={"epub:type": "toc"}) or soup.find(id="toc")
+                    if not toc_nav:
+                        continue
+                    changed = False
+                    for a_tag in toc_nav.find_all("a"):
+                        href = a_tag.get("href", "")
+                        if not href:
+                            continue
+                        norm_href = str(Path(href).as_posix())
+                        base_href = norm_href.split("#")[0]
+                        filename = Path(base_href).name
+
+                        h_info = (
+                            chapter_headings.get(norm_href)
+                            or chapter_headings.get(href)
+                            or chapter_headings.get(filename)
+                            or chapter_headings.get(base_href)
+                        )
+                        if not h_info and "#" in norm_href:
+                            target_id = norm_href.split("#")[1]
+                            h_info = chapter_headings.get(f"{filename}#{target_id}") or chapter_headings.get(f"text/{filename}#{target_id}")
+
+                        if h_info:
+                            comp_title = h_info.get("composite_title")
+                            heading_texts = h_info.get("heading_texts", [])
+                            curr_text = a_tag.get_text(" ", strip=True)
+                            if comp_title and should_update_title(curr_text, heading_texts):
+                                a_tag.string = comp_title
+                                changed = True
+
+                    if changed:
+                        nav_file.write_text(str(soup), encoding="utf-8")
+                        logger.info(f"Synchronized chapter titles in NAV XHTML: {nav_file.name}")
+                except Exception as e:
+                    logger.warning(f"Could not synchronize NAV XHTML {nav_file}: {e}")
+
+        except Exception as e:
+            logger.warning(f"Could not synchronize navigation in {temp_dir}: {e}")
 
     def _create_epub_container(self, source_dir: Path, output_epub: Path) -> None:
         """Zips source_dir into an EPUB container conforming strictly to OCF specifications."""

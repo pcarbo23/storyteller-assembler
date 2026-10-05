@@ -13,6 +13,10 @@ import os
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 os.environ["OMP_NUM_THREADS"] = "1"
 
+for p in ["/usr/local/bin", "/opt/homebrew/bin"]:
+    if p not in os.environ.get("PATH", ""):
+        os.environ["PATH"] = f"{p}:{os.environ.get('PATH', '')}"
+
 from src.tts_generator import TTSGenerator
 
 logging.basicConfig(level=logging.ERROR)
@@ -33,7 +37,7 @@ def main():
 
     try:
         # Initialize and run TTS in this clean process
-        generator = TTSGenerator(use_coqui=True)
+        generator = TTSGenerator(use_coqui=True, lazy_init=False)
         timing_info = generator.generate_speech_file(text_steps, output_path, force_direct=True)
         
         # 1. Write timing info to a dedicated sidecar JSON file to bypass stdout clutter

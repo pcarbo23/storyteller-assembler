@@ -1,6 +1,7 @@
 import logging
 import subprocess
 import shutil
+import sys
 from pathlib import Path
 from typing import List, Optional
 
@@ -78,20 +79,10 @@ class AlignRunner:
         log_level: str = "info"
     ) -> None:
         """
-        Executes forced alignment using the pre-built Docker aligner container with disk-backed scratch storage.
+        Executes forced alignment using either native node (on macOS) or Docker (fallback).
         """
         # Ensure output directory exists
         output_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # Map host paths to container /data mounted paths
-        data_dir = self.project_root / "data"
-
-        def to_container_path(p: Path) -> str:
-            try:
-                rel = p.resolve().relative_to(data_dir.resolve())
-                return f"/data/{rel}"
-            except ValueError:
-                raise ValueError(f"Path {p} must be located inside project data directory {data_dir}")
 
         # Check if source EPUB is legacy EPUB 2; if so, upgrade it to EPUB 3 before aligning
         from src.epub_upgrader import is_epub2, upgrade_epub2_to_epub3
@@ -101,7 +92,72 @@ class AlignRunner:
             logger.info(f"Detected EPUB 2 publication: '{epub_path.name}'. Automatically upgrading to EPUB 3 standard...")
             actual_epub_path = upgrade_epub2_to_epub3(epub_path, upgraded_epub)
 
-        container_epub = to_container_path(actual_epub_path)
+        is_macos = sys.platform == 'darwin'
+        has_npx = shutil.which('npx') is not None
+        has_align = shutil.which('align') is not None
+
+        if is_macos and (has_npx or has_align):
+            logger.info("Running natively on macOS to leverage hardware acceleration.")
+            self._align_native(actual_epub_path, audiobook_dir, output_path, engine, model, log_level)
+        else:
+            logger.info("Running via Docker fallback.")
+            self._align_docker(actual_epub_path, audiobook_dir, output_path, engine, model, log_level)
+
+        # Clean up temporary upgraded EPUB if one was created
+        if actual_epub_path != epub_path and actual_epub_path.exists():
+            actual_epub_path.unlink(missing_ok=True)
+
+        # Post-condition verification: Ensure aligned EPUB output was actually created
+        if not output_path.exists():
+            raise RuntimeError(f"Alignment failed: Aligned EPUB output file was not created at {output_path}")
+
+        logger.info("Alignment finished successfully.")
+
+    def _align_native(
+        self,
+        epub_path: Path,
+        audiobook_dir: Path,
+        output_path: Path,
+        engine: str,
+        model: str,
+        log_level: str
+    ) -> None:
+        engine_args = ["--ctc"] if engine == "ctc" else ["-e", engine]
+        
+        # Use globally installed align if available, else npx
+        base_cmd = ["align"] if shutil.which("align") else ["npx", "--no-install", "@storyteller-platform/align"]
+        
+        cmd = base_cmd + [
+            "--epub", str(epub_path.resolve()),
+            "--audiobook", str(audiobook_dir.resolve()),
+            "--output", str(output_path.resolve()),
+            *engine_args,
+            "-m", model,
+            "--log-level", log_level
+        ]
+
+        logger.info(f"Running native macOS aligner: {' '.join(cmd)}")
+        self._run_process(cmd)
+
+    def _align_docker(
+        self,
+        epub_path: Path,
+        audiobook_dir: Path,
+        output_path: Path,
+        engine: str,
+        model: str,
+        log_level: str
+    ) -> None:
+        data_dir = self.project_root / "data"
+
+        def to_container_path(p: Path) -> str:
+            try:
+                rel = p.resolve().relative_to(data_dir.resolve())
+                return f"/data/{rel}"
+            except ValueError:
+                raise ValueError(f"Path {p} must be located inside project data directory {data_dir}")
+
+        container_epub = to_container_path(epub_path)
         container_audiobook = to_container_path(audiobook_dir)
         container_output = to_container_path(output_path)
 
@@ -128,17 +184,18 @@ class AlignRunner:
         ]
 
         logger.info(f"Running dedicated docker aligner ({image_name}): {' '.join(cmd)}")
-        
-        # Run command and capture output
+        self._run_process(cmd)
+
+    def _run_process(self, cmd: List[str]) -> None:
         process = subprocess.Popen(
             cmd,
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
             bufsize=1
         )
 
-        # Print output in real-time with explicit flush
         if process.stdout:
             if hasattr(process.stdout, "readline"):
                 for line in iter(process.stdout.readline, ""):
@@ -152,8 +209,7 @@ class AlignRunner:
             if process.returncode == 137:
                 raise RuntimeError(
                     f"Alignment failed with exit code 137 (Out of Memory / SIGKILL). "
-                    f"The Docker VM memory limit was reached during model alignment. "
-                    f"Ensure sufficient memory is allocated in Docker Desktop settings."
+                    f"The memory limit was reached during model alignment. "
                 )
             elif process.returncode == 100:
                 raise RuntimeError(
@@ -161,13 +217,3 @@ class AlignRunner:
                 )
             else:
                 raise RuntimeError(f"Alignment failed with exit code {process.returncode}")
-
-        # Clean up temporary upgraded EPUB if one was created
-        if actual_epub_path != epub_path and actual_epub_path.exists():
-            actual_epub_path.unlink(missing_ok=True)
-
-        # Post-condition verification: Ensure aligned EPUB output was actually created
-        if not output_path.exists():
-            raise RuntimeError(f"Alignment failed: Aligned EPUB output file was not created at {output_path}")
-
-        logger.info("Alignment finished successfully.")
