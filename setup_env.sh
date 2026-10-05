@@ -9,7 +9,7 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$DIR"
 
 echo "========================================================================"
-echo "  📚 Storyteller Assembler Environment Setup"
+echo "  📚 Storyteller Assembler Environment Setup (v2.0.0)"
 echo "========================================================================"
 
 # 1. Check Python version

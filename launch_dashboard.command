@@ -12,7 +12,7 @@ fi
 DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$DIR"
 
-echo "=== Starting AutoStoryPipe Ingestion Dashboard ==="
+echo "=== Starting AutoStoryPipe Ingestion Dashboard (v2.0.0) ==="
 echo "Working directory: $DIR"
 
 # Check if virtual environment exists
