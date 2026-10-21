@@ -190,7 +190,10 @@ def process_book_job(pair: dict, align_runner: AlignRunner, tts_gen: TTSGenerato
             epub_path=epub_path,
             audiobook_dir=audiobook_dir,
             output_path=aligned_epub_path,
-            model="tiny.en"
+            ctc=True,
+            model="quartznet15x5",
+            language="en",
+            device="auto"
         )
     except Exception as e:
         err_msg = f"Alignment failed: {e}"

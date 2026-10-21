@@ -52,6 +52,77 @@ class TestAlignRunner(unittest.TestCase):
 
     @patch("src.align_runner.ensure_aligner_image")
     @patch("src.align_runner.subprocess.Popen")
+    def test_align_default_ctc_command_construction(self, mock_popen, mock_ensure_img):
+        mock_ensure_img.return_value = "auto_story_pipe_aligner:latest"
+        mock_process = MagicMock()
+        mock_process.stdout = iter([])
+        mock_process.wait.return_value = None
+        mock_process.returncode = 0
+        mock_popen.return_value = mock_process
+
+        epub = self.project_root / "data" / "test.epub"
+        audio_dir = self.project_root / "data" / "audio"
+        out_epub = self.project_root / "data" / "processing" / "test_aligned.epub"
+
+        with patch.object(Path, "exists", return_value=True), patch("sys.platform", "linux"):
+            self.runner.align(epub, audio_dir, out_epub)
+
+        cmd = mock_popen.call_args[0][0]
+        image_idx = cmd.index("auto_story_pipe_aligner:latest")
+        container_args = cmd[image_idx + 1:]
+
+        self.assertIn("--ctc", container_args)
+        self.assertIn("--model", container_args)
+        self.assertEqual(container_args[container_args.index("--model") + 1], "quartznet15x5")
+        self.assertIn("--language", container_args)
+        self.assertEqual(container_args[container_args.index("--language") + 1], "en")
+        self.assertIn("--device", container_args)
+        self.assertEqual(container_args[container_args.index("--device") + 1], "auto")
+        # Ensure Whisper-only flags are omitted when --ctc is active
+        self.assertNotIn("-e", container_args)
+        self.assertNotIn("-m", container_args)
+        self.assertNotIn("whisper.cpp", container_args)
+
+    @patch("src.align_runner.subprocess.Popen")
+    @patch("src.align_runner.shutil.which", side_effect=lambda name: "/opt/homebrew/bin/align" if name == "align" else None)
+    def test_align_native_ctc_quartznet_with_options(self, mock_which, mock_popen):
+        mock_process = MagicMock()
+        mock_process.stdout = iter([])
+        mock_process.wait.return_value = None
+        mock_process.returncode = 0
+        mock_popen.return_value = mock_process
+
+        epub = self.project_root / "data" / "test.epub"
+        audio_dir = self.project_root / "data" / "audio"
+        out_epub = self.project_root / "data" / "processing" / "test_aligned.epub"
+        emissions_dir = self.project_root / "data" / "processing" / "emissions"
+
+        with patch.object(Path, "exists", return_value=True), patch.object(Path, "mkdir"), patch("sys.platform", "darwin"):
+            self.runner.align(
+                epub,
+                audio_dir,
+                out_epub,
+                ctc=True,
+                model="quartznet15x5",
+                device="mlx",
+                language="en",
+                gap_seconds=3.5,
+                emissions_dir=emissions_dir,
+            )
+
+        cmd = mock_popen.call_args[0][0]
+        self.assertEqual(cmd[0], "align")
+        self.assertIn("--ctc", cmd)
+        self.assertEqual(cmd[cmd.index("--model") + 1], "quartznet15x5")
+        self.assertEqual(cmd[cmd.index("--device") + 1], "mlx")
+        self.assertEqual(cmd[cmd.index("--language") + 1], "en")
+        self.assertEqual(cmd[cmd.index("--gap-seconds") + 1], "3.5")
+        self.assertEqual(cmd[cmd.index("--emissions") + 1], str(emissions_dir.resolve()))
+        self.assertNotIn("-e", cmd)
+        self.assertNotIn("-m", cmd)
+
+    @patch("src.align_runner.ensure_aligner_image")
+    @patch("src.align_runner.subprocess.Popen")
     def test_align_command_construction(self, mock_popen, mock_ensure_img):
         mock_ensure_img.return_value = "auto_story_pipe_aligner:latest"
         mock_process = MagicMock()

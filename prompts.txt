@@ -1,0 +1,77 @@
+
+Prompt 1: Backend & Database Schema Updates (Requirements 2 & 3)
+
+
+Prompt:
+We need to track two new metrics for our books in data/production_history.db and data/production_log.csv: Total Production Time (elapsed processing time) and Total Narration Time (dtb:totalTime from the OPF metadata).
+
+Please search the codebase for where the OPF metadata is parsed and where production_history records are inserted into SQLite, and make the following changes:
+
+1. OPF Metadata Extraction: In the OPF parser, extract the <meta name="dtb:totalTime" content="..."/> (or corresponding element/property) value. Store this as dtb_total_time (usually formatted as HH:MM:SS or HH:MM:SS.ms).
+2. Elapsed Time Tracking: Ensure the total elapsed processing time in seconds (time_elapsed_seconds from the job status JSON) is passed to the database logging function upon job completion.
+3. SQLite Schema & Migration: Update the production_history table creation schema to include time_elapsed_seconds REAL DEFAULT 0.0 and dtb_total_time TEXT DEFAULT '00:00:00'. Add a safe migration check (using PRAGMA table_info(production_history) and ALTER TABLE) so existing databases automatically get these two new columns without losing data.
+4. Dashboard Query Update: In dashboard.py, update load_production_history() so the SELECT statement also retrieves time_elapsed_seconds and dtb_total_time.
+
+Prompt 2: Live Queue Time Formatting (Requirement 1)
+
+Prompt:
+In dashboard.py, we want to make the "Elapsed Time" column in the Live Assembler Queue table (tab_queue) easier to read.
+
+1. Create a helper function format_elapsed_ms(seconds: float) -> str that converts a float of seconds into a MM:SS.mmm format (e.g., 59:59.999 or 125:04.050 if it exceeds an hour). Use int(seconds // 60) for minutes, int(seconds % 60) for seconds, and int(round((seconds % 1) * 1000)) for milliseconds, formatted as f"{minutes:02d}:{secs:02d}.{ms:03d}".
+2. In render_dashboard() under tab_queue, replace "Elapsed Time": f"{elapsed:.1f}s" with "Elapsed Time": format_elapsed_ms(elapsed).
+3. Keep "elapsed_seconds": elapsed unchanged so the table sorting logic continues to sort numerically.
+
+Prompt 3: Analytics & Audit Summary Overhaul (Requirements 2, 3, 4, & 5)
+
+Prompt:
+In dashboard.py, update the Analytics & Audit section (tab_metrics) to display new time-based summary metrics and remove the publisher/narrator counts:
+
+1. Helper Functions for Time:
+  ⚬ Create a helper function parse_dtb_time_to_seconds(time_str: str) -> float that safely parses dtb:totalTime strings (handling formats like HH:MM:SS, HH:MM:SS.ms, MM:SS, or s suffixes) into total seconds. Return 0.0 if missing or invalid.
+  ⚬ Create a helper function format_duration_hms(total_seconds: float) -> str to format cumulative seconds cleanly for the summary metrics (e.g., HH:MM:SS).
+2. Calculate Totals: In tab_metrics, iterate through all_records:
+  ⚬ Calculate Total Production Time by summing r.get("time_elapsed_seconds") or 0.0 across all records. (As a fallback for older records where the DB value might be 0, check if a matching data/processing/{prod_id}_status.json exists and use its time_elapsed_seconds).
+  ⚬ Calculate Total Narration Time by summing parse_dtb_time_to_seconds(r.get("dtb_total_time", "")) across all records.
+3. Update Summary Metrics Layout:
+  ⚬ Remove the unique_narrators ("Distinct Narrators") and unique_publishers ("Source Publishers") calculations and metrics.
+  ⚬ Using m1, m2, m3, m4 = st.columns(4), present the metrics in this exact order:
+    ⚬ m1: Total Books Produced (f"{total_prod}")
+    ⚬ m2: Total Narration Time (formatted via format_duration_hms)
+    ⚬ m3: Total Production Time (formatted via format_duration_hms)
+    ⚬ m4: Compliance Pass Rate (f"{pass_rate:.1f}%", delta=f"{passed_prod} Passed / {failed_prod} Failed")
+
+Prompt 4: Header Status Icons & Bottom Daemon Controls Reordering (Requirements 6, 7, & 8)
+
+Prompt:
+In dashboard.py, reorganize the layout of render_dashboard() so the daemon statuses are shown as compact indicators in the header, while the full daemon controllers and logs are moved to the bottom of the page.
+
+Please make the following structural adjustments in render_dashboard():
+
+1. Pre-compute Daemon States at the Top:
+  ⚬ Before rendering the header, evaluate watcher_running (using the existing heartbeat_data, pid, seconds_ago < 15, and is_pid_running(pid) logic) and docker_online (via check_docker_health()).
+2. Top Header Status Lights (Requirement 8):
+  ⚬ Add CSS classes to the <style> block for header status indicators: a flex container pushed to the right (or aligned beside the version tag), and circular status dots (.status-dot.green with #10B981 and .status-dot.red with #EF4444, width: 10px; height: 10px; border-radius: 50%; display: inline-block;).
+  ⚬ Update the .main-header HTML block so that directly to the right of the title and v{__version__} badge, it displays the two small status indicators: a green light if running/online or red light if off, each with its label next to it (Watcher Daemon and Docker Daemon).
+3. Move Tabs to the Top:
+  ⚬ Immediately below the .subheader div (and sidebar block), render the main data tabs (tab_queue, tab_archive, tab_metrics).
+4. Reorder Bottom Elements (Requirements 6 & 7):
+  ⚬ Below the tabs, keep the manual 🔄 Refresh Data button.
+  ⚬ Immediately below the 🔄 Refresh Data button, place the 📝 View Watcher Daemon Logs expander (st.expander("📝 View Watcher Daemon Logs", expanded=False)).
+  ⚬ Immediately below the Watcher Daemon Logs expander, place the two columns (col1, col2 = st.columns(2)) containing the original full 🤖 Watcher Daemon and 🐳 Docker Daemon status cards, large status indicators (st.success/st.warning/st.error), and start/stop/launch buttons.
+  ⚬ Keep the auto-refresh caption at the very bottom.
+
+All-in-One Prompt (Optional)
+
+If your AI assistant has a large context window (like Claude 3.5 Sonnet, GPT-4o, or Gemini 1.5 Pro) and can edit multiple files at once, you can alternatively paste this single consolidated specification:
+
+Consolidated Prompt:
+Please update dashboard.py (and the relevant database/OPF ingestion scripts) with the following 8 UI/UX and data changes:
+
+1. Live Queue Elapsed Time Format: In tab_queue, format "Elapsed Time" as  minutes:seconds.ms (MM:SS.mmm, e.g., 59:59.999) instead of 000.0s. Keep sorting based on raw elapsed_seconds.
+2. Database & OPF Metadata (dtb:totalTime & time_elapsed_seconds): Ensure the OPF parser extracts dtb:totalTime and saves it alongside the job's time_elapsed_seconds into production_history.db (add auto-migration ALTER TABLE logic if the columns don't exist). Update load_production_history() in dashboard.py to select both fields.
+3. Analytics Summary Metrics: In tab_metrics, calculate Total Production Time (sum of elapsed time across all books produced) and Total Narration Time (sum of parsed dtb:totalTime across all books).
+4. Summary Metric Order: In tab_metrics, display the 4 summary columns in this exact order: (1) Total Books Produced, (2) Total Narration Time, (3) Total Production Time, (4) Compliance Pass Rate.
+5. Remove Summary Metrics: Remove Distinct Narrators and Source Publishers from the tab_metrics summary.
+6. Header Daemon Status Lights: Next to the title and version number in .main-header, render compact status indicators for Watcher Daemon and Docker Daemon—each featuring a simple green circle light for on/running or red circle light for off, with the daemon name labeled next to the light.
+7. Move Daemon Controllers to Bottom: Move the full Watcher Daemon and Docker Daemon cards (with their large status banners and control buttons) to the bottom of the page, below all data tabs.
+8. Log Viewer Placement: Place the 📝 View Watcher Daemon Logs expander immediately below the 🔄 Refresh Data button and immediately above the bottom Daemon controller cards.
